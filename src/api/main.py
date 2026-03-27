@@ -263,9 +263,32 @@ class ActivityResponse(BaseModel):
     total: int
 
 
+# Demo user returned when DEMO_MODE=true
+_DEMO_USER = User(
+    id=UUID("00000000-0000-0000-0000-000000000000"),
+    username="demo",
+    email="demo@musicmind.local",
+    created_at=datetime(2024, 1, 1),
+)
+
+_bearer = HTTPBearer(auto_error=False)
+
+
 # Dependency: Get current user
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> User:
-    """Get current authenticated user from JWT token."""
+async def get_current_user(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+) -> User:
+    """Get current authenticated user from JWT token. In demo mode, returns a demo user."""
+    if settings.demo_mode:
+        return _DEMO_USER
+
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authenticated",
+        )
+
     if not auth_service:
         raise HTTPException(status_code=503, detail="Auth service not available")
 
@@ -284,6 +307,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 # Dependency: Rate limiting
 async def check_rate_limit(user: User = Depends(get_current_user)):
     """Check rate limit for current user."""
+    if settings.demo_mode:
+        return
+
     if not rate_limiter:
         return
 
@@ -308,6 +334,12 @@ async def health_check():
             "overmind": overmind_client is not None,
         },
     }
+
+
+@app.get("/api/config")
+async def get_config():
+    """Public config endpoint for the frontend."""
+    return {"demo_mode": settings.demo_mode}
 
 
 # Search endpoint

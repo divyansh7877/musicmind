@@ -2,9 +2,12 @@ import { createContext, useContext, useState, useCallback, useEffect, type React
 import { login as apiLogin, register as apiRegister, clearTokens, isAuthenticated } from '../utils/api';
 import type { User } from '../types/api';
 
+const DEMO_USER: User = { id: '00000000-0000-0000-0000-000000000000', username: 'demo', email: 'demo@musicmind.local' };
+
 interface AuthContextType {
   user: User | null;
   isLoggedIn: boolean;
+  demoMode: boolean;
   login: (username: string, password: string) => Promise<void>;
   register: (username: string, password: string, email: string) => Promise<void>;
   logout: () => void;
@@ -35,12 +38,25 @@ function userFromToken(): User | null {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(userFromToken);
+  const [demoMode, setDemoMode] = useState(false);
 
   useEffect(() => {
-    if (isAuthenticated() && !user) {
+    fetch('/api/config')
+      .then((r) => r.json())
+      .then((cfg) => {
+        if (cfg.demo_mode) {
+          setDemoMode(true);
+          setUser(DEMO_USER);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!demoMode && isAuthenticated() && !user) {
       setUser(userFromToken());
     }
-  }, [user]);
+  }, [user, demoMode]);
 
   const login = useCallback(async (username: string, password: string) => {
     await apiLogin(username, password);
@@ -53,12 +69,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
+    if (demoMode) return;
     clearTokens();
     setUser(null);
-  }, []);
+  }, [demoMode]);
 
   return (
-    <AuthContext.Provider value={{ user, isLoggedIn: !!user, login, register, logout }}>
+    <AuthContext.Provider value={{ user, isLoggedIn: demoMode || !!user, demoMode, login, register, logout }}>
       {children}
     </AuthContext.Provider>
   );

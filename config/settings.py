@@ -57,6 +57,12 @@ class Settings(BaseSettings):
         default="https://api.overmind.com", description="Overmind Lab endpoint"
     )
 
+    # Demo Mode
+    demo_mode: bool = Field(
+        default=False,
+        description="Enable demo mode to bypass authentication",
+    )
+
     # CORS / Frontend
     cors_origins: str = Field(
         default="*",

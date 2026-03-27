@@ -47,7 +47,12 @@ def auth_service(mock_redis):
 @pytest.fixture
 def client():
     """Create test client with mocked globals."""
+    from config.settings import settings
     import src.api.main as api_main
+
+    # Ensure demo mode is off so auth tests are meaningful
+    original_demo_mode = settings.demo_mode
+    settings.demo_mode = False
 
     mock_redis = MockRedisClient()
     mock_overmind = MagicMock()
@@ -68,6 +73,8 @@ def client():
     api_main.feedback_processor = MagicMock()
 
     yield TestClient(api_main.app, raise_server_exceptions=False)
+
+    settings.demo_mode = original_demo_mode
 
     # Cleanup
     api_main.auth_service = None
