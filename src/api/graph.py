@@ -3,7 +3,7 @@
 import logging
 from collections import deque
 from datetime import datetime
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -184,8 +184,8 @@ class GraphService:
             truncated=truncated,
         )
 
-    def _get_node(self, node_id: UUID) -> Dict[str, Any]:
-        """Get node by ID.
+    def _get_node(self, node_id: UUID) -> Optional[Dict[str, Any]]:
+        """Get node by ID, searching across all node types.
 
         Args:
             node_id: Node ID
@@ -193,31 +193,29 @@ class GraphService:
         Returns:
             Node data dictionary or None if not found
         """
+        node_id_str = str(node_id)
+        node_types = [
+            "Song", "Artist", "Album", "RecordLabel",
+            "Instrument", "Venue", "Concert",
+        ]
+
         try:
-            # Try different node types
-            node_types = [
-                "Song",
-                "Artist",
-                "Album",
-                "RecordLabel",
-                "Instrument",
-                "Venue",
-                "Concert",
-            ]
-
             for node_type in node_types:
-                node = self.db_client._get_node_by_id(node_id)
-                if node:
-                    node["type"] = node_type
-                    return node
-
+                key = (self.db_client.namespace, node_type, node_id_str)
+                try:
+                    _, _, record = self.db_client._client.get(key)
+                    if record:
+                        record["type"] = record.get("node_type", node_type)
+                        return record
+                except Exception:
+                    continue
             return None
         except Exception as e:
             logger.error(f"Failed to get node {node_id}: {e}")
             return None
 
     def _get_node_edges(self, node_id: UUID, node_type: str) -> List[Dict[str, Any]]:
-        """Get all edges from a node.
+        """Get all edges from/to a node by scanning edge sets.
 
         Args:
             node_id: Node ID
@@ -226,17 +224,41 @@ class GraphService:
         Returns:
             List of edge dictionaries
         """
-        try:
-            edges = []
+        node_id_str = str(node_id)
+        edges: List[Dict[str, Any]] = []
+        edge_types = ["PERFORMED_IN", "PART_OF_ALBUM", "SIGNED_WITH", "SIMILAR_TO", "PLAYED_INSTRUMENT", "PERFORMED_AT"]
 
-            # Query edges based on node type
-            # In production, implement proper edge queries
-            # For now, return empty list as placeholder
+        for edge_type in edge_types:
+            try:
+                scan = self.db_client._client.scan(self.db_client.namespace, edge_type)
+                results: List[Dict[str, Any]] = []
 
-            return edges
-        except Exception as e:
-            logger.error(f"Failed to get edges for node {node_id}: {e}")
-            return []
+                def _collect(input_tuple: Any, out: List = results) -> None:
+                    _, _, record = input_tuple
+                    if record and (
+                        record.get("from_node_id") == node_id_str
+                        or record.get("to_node_id") == node_id_str
+                    ):
+                        out.append(record)
+
+                scan.foreach(_collect)
+
+                for rec in results:
+                    from_id = rec.get("from_node_id", "")
+                    to_id = rec.get("to_node_id", "")
+                    edges.append({
+                        "from_node_id": from_id,
+                        "to_node_id": to_id,
+                        "edge_type": rec.get("edge_type", edge_type),
+                        "properties": {
+                            k: v for k, v in rec.items()
+                            if k not in ("from_node_id", "to_node_id", "edge_type", "id")
+                        },
+                    })
+            except Exception as e:
+                logger.debug(f"Edge scan for {edge_type} failed: {e}")
+
+        return edges
 
     def _sanitize_node_data(self, node: Dict[str, Any]) -> Dict[str, Any]:
         """Sanitize node data for frontend.

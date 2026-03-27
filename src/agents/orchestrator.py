@@ -187,10 +187,8 @@ class OrchestratorAgent:
             # Step 6: Calculate overall completeness
             completeness_score = self._calculate_overall_completeness(merged_data)
 
-            # Step 7: Create enrichment result
-            # Note: Graph persistence would happen here in full implementation
-            # For now, we'll create placeholder node IDs
-            graph_node_ids = [uuid4()]  # Placeholder for song node
+            # Step 7: Persist to graph database
+            graph_node_ids = self._persist_to_graph(merged_data, completeness_score)
 
             enrichment_result = EnrichmentResult(
                 status="success" if any(r.status == "success" for r in results) else "partial",
@@ -646,6 +644,132 @@ class OrchestratorAgent:
         # Get quality from self-improvement engine
         quality_report = self.quality_tracker.get_source_quality_report()
         return quality_report.get_quality(source_name)
+
+    def _persist_to_graph(
+        self, merged_data: Dict[str, Any], completeness_score: float
+    ) -> List[UUID]:
+        """Persist enrichment data to the graph database.
+
+        Creates/updates Song, Artist, and Album nodes and connects them
+        with edges. Uses deterministic IDs based on entity names so that
+        repeated enrichments merge into the same nodes.
+
+        Args:
+            merged_data: Merged data from all agents
+            completeness_score: Overall completeness score
+
+        Returns:
+            List of persisted graph node UUIDs
+        """
+        if not self.db_client:
+            return [uuid4()]
+
+        import hashlib
+
+        def _deterministic_uuid(namespace: str, name: str) -> UUID:
+            h = hashlib.sha256(f"{namespace}:{name.lower().strip()}".encode()).hexdigest()
+            return UUID(h[:32])
+
+        graph_node_ids: List[UUID] = []
+        song_data = merged_data.get("song", {})
+        artists_data = merged_data.get("artists", [])
+        album_data = merged_data.get("album", {})
+        data_sources = merged_data.get("data_sources", [])
+
+        try:
+            # --- Song node ---
+            song_title = song_data.get("title") or song_data.get("name", "")
+            if song_title:
+                song_id = _deterministic_uuid("song", song_title)
+                song_props = {
+                    "id": str(song_id),
+                    "title": song_title,
+                    "node_type": "Song",
+                    "completeness_score": completeness_score,
+                    "last_enriched": datetime.utcnow().isoformat(),
+                    "data_sources": data_sources,
+                }
+                for k, v in song_data.items():
+                    if k not in song_props and v is not None:
+                        song_props[k] = v
+                self.db_client.upsert_node("Song", song_props)
+                graph_node_ids.append(song_id)
+
+                # --- Artist nodes + PERFORMED_IN edges ---
+                if isinstance(artists_data, list):
+                    for artist in artists_data:
+                        artist_name = artist.get("name", "") if isinstance(artist, dict) else ""
+                        if not artist_name:
+                            continue
+                        artist_id = _deterministic_uuid("artist", artist_name)
+                        artist_props = {
+                            "id": str(artist_id),
+                            "name": artist_name,
+                            "node_type": "Artist",
+                            "last_enriched": datetime.utcnow().isoformat(),
+                        }
+                        if isinstance(artist, dict):
+                            for k, v in artist.items():
+                                if k not in artist_props and v is not None:
+                                    artist_props[k] = v
+                        self.db_client.upsert_node("Artist", artist_props)
+                        graph_node_ids.append(artist_id)
+
+                        # Edge: Artist --PERFORMED_IN--> Song
+                        edge_id = _deterministic_uuid("performed_in", f"{artist_name}:{song_title}")
+                        try:
+                            self.db_client.upsert_edge(
+                                from_node_id=artist_id,
+                                to_node_id=song_id,
+                                edge_type="PERFORMED_IN",
+                                properties={
+                                    "id": str(edge_id),
+                                    "from_node_id": str(artist_id),
+                                    "to_node_id": str(song_id),
+                                },
+                            )
+                        except ValueError:
+                            logger.debug(f"Skipped edge for {artist_name} -> {song_title}")
+
+                # --- Album node + PART_OF_ALBUM edge ---
+                if album_data and isinstance(album_data, dict):
+                    album_name = album_data.get("name") or album_data.get("title", "")
+                    if album_name:
+                        album_id = _deterministic_uuid("album", album_name)
+                        album_props = {
+                            "id": str(album_id),
+                            "name": album_name,
+                            "node_type": "Album",
+                            "last_enriched": datetime.utcnow().isoformat(),
+                        }
+                        for k, v in album_data.items():
+                            if k not in album_props and v is not None:
+                                album_props[k] = v
+                        self.db_client.upsert_node("Album", album_props)
+                        graph_node_ids.append(album_id)
+
+                        # Edge: Song --PART_OF_ALBUM--> Album
+                        edge_id = _deterministic_uuid("part_of_album", f"{song_title}:{album_name}")
+                        try:
+                            self.db_client.upsert_edge(
+                                from_node_id=song_id,
+                                to_node_id=album_id,
+                                edge_type="PART_OF_ALBUM",
+                                properties={
+                                    "id": str(edge_id),
+                                    "from_node_id": str(song_id),
+                                    "to_node_id": str(album_id),
+                                },
+                            )
+                        except ValueError:
+                            logger.debug(f"Skipped edge for {song_title} -> {album_name}")
+
+        except Exception as e:
+            logger.warning(f"Graph persistence failed (non-fatal): {e}")
+            if not graph_node_ids:
+                graph_node_ids = [uuid4()]
+
+        return graph_node_ids
 
     def _calculate_overall_completeness(self, merged_data: Dict[str, Any]) -> float:
         """Calculate overall completeness score for merged data.

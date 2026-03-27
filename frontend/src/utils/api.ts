@@ -73,9 +73,14 @@ export async function searchSong(songName: string): Promise<SearchResponse> {
   return data;
 }
 
-export async function traverseGraph(nodeId: string, maxDepth = 2): Promise<GraphTraversalResponse> {
+export async function traverseGraph(
+  nodeId: string,
+  maxDepth = 2,
+  searchResult?: Record<string, unknown>,
+): Promise<GraphTraversalResponse> {
   const { data } = await api.post<GraphTraversalResponse>(`/graph/${nodeId}`, {
     max_depth: maxDepth,
+    search_result: searchResult ?? null,
   });
   return data;
 }

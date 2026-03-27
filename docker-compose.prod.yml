@@ -48,7 +48,7 @@ services:
     restart: unless-stopped
 
   aerospike:
-    image: aerospike/aerospike-server-enterprise:latest
+    image: aerospike/aerospike-server:latest
     container_name: musicmind-aerospike
     ports:
       - "3000:3000"
@@ -56,7 +56,7 @@ services:
       - "3002:3002"
     volumes:
       - aerospike-data:/opt/aerospike/data
-      - ./config/aerospike.conf:/etc/aerospike/aerospike.conf:ro
+      - ./config/aerospike.conf:/etc/aerospike/aerospike.conf
     environment:
       - NAMESPACE=musicmind
     healthcheck:

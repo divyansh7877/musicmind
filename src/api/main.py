@@ -372,26 +372,77 @@ async def search_song(
 
 
 # Graph traversal endpoint
+class GraphTraversalRequestWithFallback(GraphTraversalRequest):
+    """Extended request that optionally includes search result for graph building."""
+
+    search_result: Optional[Dict[str, Any]] = None
+
+
 @app.post("/api/graph/{node_id}", response_model=GraphTraversalResponse)
 async def traverse_graph(
     node_id: UUID,
-    request: GraphTraversalRequest,
+    request: GraphTraversalRequestWithFallback,
     user: User = Depends(get_current_user),
 ):
     """Traverse graph from a node with depth limit."""
-    if not graph_service:
-        raise ServiceUnavailableError("graph_service")
+    # Try real graph traversal first
+    if graph_service:
+        try:
+            result = await graph_service.traverse_graph(node_id, request.max_depth)
+            return result
+        except ValueError:
+            pass  # Node not in DB, fall through to build from search result
+        except (MusicMindError, HTTPException):
+            raise
+        except Exception as e:
+            logger.error(f"Graph traversal failed: {e}", exc_info=True)
 
-    try:
-        result = await graph_service.traverse_graph(node_id, request.max_depth)
-        return result
-    except (MusicMindError, HTTPException):
-        raise
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Graph traversal failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    # Build graph from search result data (works without Aerospike)
+    if request.search_result:
+        return _build_graph_from_search_result(str(node_id), request.search_result)
+
+    raise HTTPException(status_code=404, detail="Node not found and no search data provided")
+
+
+def _build_graph_from_search_result(
+    root_id: str, merged_data: Dict[str, Any]
+) -> GraphTraversalResponse:
+    """Build a graph visualization response from enrichment search result data."""
+    from src.api.graph import GraphNode, GraphEdge
+
+    nodes: List[GraphNode] = []
+    edges: List[GraphEdge] = []
+
+    song = merged_data.get("song", {})
+    artists = merged_data.get("artists", [])
+    album = merged_data.get("album", {})
+
+    # Song node (root)
+    song_label = song.get("title") or song.get("name", "Unknown Song")
+    nodes.append(GraphNode(id=root_id, type="Song", data={**song, "label": song_label}))
+
+    # Artist nodes
+    for i, artist in enumerate(artists if isinstance(artists, list) else []):
+        artist_name = artist.get("name", f"Artist {i+1}")
+        aid = f"artist-{i}-{artist_name.lower().replace(' ', '-')}"
+        nodes.append(GraphNode(id=aid, type="Artist", data={**artist, "label": artist_name}))
+        edges.append(GraphEdge(from_node_id=aid, to_node_id=root_id, edge_type="PERFORMED_IN"))
+
+    # Album node
+    if album:
+        album_name = album.get("name") or album.get("title", "Unknown Album")
+        alid = f"album-{album_name.lower().replace(' ', '-')}"
+        nodes.append(GraphNode(id=alid, type="Album", data={**album, "label": album_name}))
+        edges.append(GraphEdge(from_node_id=root_id, to_node_id=alid, edge_type="PART_OF_ALBUM"))
+
+    return GraphTraversalResponse(
+        nodes=nodes,
+        edges=edges,
+        total_nodes=len(nodes),
+        total_edges=len(edges),
+        depth_reached=1,
+        truncated=False,
+    )
 
 
 # Feedback endpoint

@@ -17,7 +17,7 @@ export default function GraphPage() {
 
   const graphQuery = useQuery({
     queryKey: ['graph', nodeId, depth],
-    queryFn: () => traverseGraph(nodeId!, depth),
+    queryFn: () => traverseGraph(nodeId!, depth, searchResult?.merged_data),
     enabled: !!nodeId,
     retry: 2,
   });
