@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   aerospike:
     image: aerospike/aerospike-server-enterprise:latest

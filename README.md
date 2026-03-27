@@ -41,6 +41,7 @@ pip install -e ".[dev]"
 ```bash
 cp .env.example .env
 # Edit .env with your API credentials
+# See docs/API_CREDENTIALS.md for detailed instructions on obtaining API keys
 ```
 
 5. Start infrastructure services:
@@ -60,11 +61,24 @@ musicmind-agent-platform/
 ├── src/                    # Application source code
 ├── tests/                  # Test files
 ├── config/                 # Configuration files
+│   ├── settings.py        # Centralized settings
+│   └── aerospike.conf     # Aerospike database configuration
 ├── scripts/                # Utility scripts
+├── docs/                   # Documentation
+│   └── API_CREDENTIALS.md # Guide for obtaining API credentials
 ├── docker-compose.yml      # Docker services configuration
 ├── pyproject.toml          # Project dependencies
 └── README.md              # This file
 ```
+
+## API Credentials
+
+Before running the application, you need to obtain API credentials from:
+- **Spotify**: Client ID and Client Secret
+- **Last.fm**: API Key
+- **MusicBrainz**: User agent with contact email (no registration required)
+
+See [docs/API_CREDENTIALS.md](docs/API_CREDENTIALS.md) for detailed step-by-step instructions.
 
 ## Development
 
