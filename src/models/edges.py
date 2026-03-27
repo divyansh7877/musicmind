@@ -32,9 +32,7 @@ class PlayedInstrumentEdge(BaseModel):
     to_node_id: UUID = Field(..., description="Instrument node ID")
     edge_type: str = Field(default="PLAYED_INSTRUMENT", description="Edge type")
     song_id: Optional[UUID] = Field(None, description="Song ID where instrument was played")
-    is_primary: bool = Field(
-        default=False, description="Whether this is the primary instrument"
-    )
+    is_primary: bool = Field(default=False, description="Whether this is the primary instrument")
 
     @field_validator("edge_type")
     @classmethod
@@ -96,9 +94,7 @@ class PerformedAtEdge(BaseModel):
     from_node_id: UUID = Field(..., description="Artist node ID")
     to_node_id: UUID = Field(..., description="Concert node ID")
     edge_type: str = Field(default="PERFORMED_AT", description="Edge type")
-    performance_order: Optional[int] = Field(
-        None, gt=0, description="Order in the concert lineup"
-    )
+    performance_order: Optional[int] = Field(None, gt=0, description="Order in the concert lineup")
     duration_minutes: Optional[int] = Field(None, gt=0, description="Performance duration")
 
     @field_validator("edge_type")

@@ -1,8 +1,8 @@
 """Tests for quality tracker."""
 
 import pytest
-from datetime import datetime, timedelta
-from unittest.mock import Mock, MagicMock
+from datetime import datetime
+from unittest.mock import Mock
 
 from src.self_improvement.quality_tracker import (
     QualityMetrics,
@@ -331,6 +331,7 @@ class TestQualityTracker:
 
     def test_get_source_quality_report(self, tracker, mock_cache_client):
         """Test getting quality report."""
+
         # Mock metrics for different sources
         def mock_get(key):
             if "spotify" in key:

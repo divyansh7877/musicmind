@@ -5,11 +5,9 @@ import logging
 import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
-from uuid import UUID
 
 import httpx
 from config.settings import settings
-from src.agents.orchestrator import AgentResult
 from src.models.nodes import Album, Artist, AudioFeatures, Song
 from src.tracing.overmind_client import OvermindClient
 from src.utils.metrics import calculate_completeness
@@ -215,7 +213,7 @@ class SpotifyAgent:
 
                     # Retry server errors with exponential backoff
                     if attempt < max_retries - 1:
-                        wait_time = (2 ** attempt) + (asyncio.get_event_loop().time() % 1)
+                        wait_time = (2**attempt) + (asyncio.get_event_loop().time() % 1)
                         logger.info(f"Retrying after {wait_time:.2f}s")
                         await asyncio.sleep(wait_time)
                         continue
@@ -227,14 +225,14 @@ class SpotifyAgent:
             except httpx.TimeoutException:
                 logger.warning(f"Request timeout on attempt {attempt + 1}")
                 if attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) + (asyncio.get_event_loop().time() % 1)
+                    wait_time = (2**attempt) + (asyncio.get_event_loop().time() % 1)
                     await asyncio.sleep(wait_time)
                     continue
                 raise Exception("Request timed out after all retries")
 
             except Exception as e:
                 if attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) + (asyncio.get_event_loop().time() % 1)
+                    wait_time = (2**attempt) + (asyncio.get_event_loop().time() % 1)
                     logger.warning(f"Request failed, retrying after {wait_time:.2f}s: {e}")
                     await asyncio.sleep(wait_time)
                     continue
@@ -333,7 +331,7 @@ class SpotifyAgent:
             track_id = track_data["id"]
             track_name = track_data["name"]
             duration_ms = track_data.get("duration_ms")
-            track_popularity = track_data.get("popularity")
+            track_data.get("popularity")
 
             # Step 3: Get audio features
             audio_features_data = await self.get_audio_features(track_id)
@@ -396,7 +394,9 @@ class SpotifyAgent:
                             elif len(release_date_str) == 7:
                                 release_date = datetime.strptime(release_date_str, "%Y-%m").date()
                             else:
-                                release_date = datetime.strptime(release_date_str, "%Y-%m-%d").date()
+                                release_date = datetime.strptime(
+                                    release_date_str, "%Y-%m-%d"
+                                ).date()
                         except ValueError:
                             logger.warning(f"Invalid release date format: {release_date_str}")
 
@@ -407,7 +407,11 @@ class SpotifyAgent:
                         total_tracks=detailed_album.get("total_tracks"),
                         spotify_id=album_id,
                         label=detailed_album.get("label"),
-                        cover_art_url=detailed_album.get("images", [{}])[0].get("url") if detailed_album.get("images") else None,
+                        cover_art_url=(
+                            detailed_album.get("images", [{}])[0].get("url")
+                            if detailed_album.get("images")
+                            else None
+                        ),
                     )
 
             # Step 7: Calculate completeness scores
@@ -428,7 +432,9 @@ class SpotifyAgent:
             # Overall completeness is weighted average
             overall_completeness = song_completeness * 0.5
             if artist_completeness_scores:
-                overall_completeness += (sum(artist_completeness_scores) / len(artist_completeness_scores)) * 0.3
+                overall_completeness += (
+                    sum(artist_completeness_scores) / len(artist_completeness_scores)
+                ) * 0.3
             if album:
                 overall_completeness += album_completeness * 0.2
 

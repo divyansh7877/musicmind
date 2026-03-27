@@ -9,7 +9,6 @@ from uuid import UUID, uuid4
 from config.settings import settings
 from src.cache.redis_client import RedisClient
 from src.tracing.overmind_client import OvermindClient, TraceContext
-from src.utils.metrics import calculate_completeness
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +86,7 @@ class OrchestratorAgent:
         self,
         cache_client: Optional[RedisClient] = None,
         overmind_client: Optional[OvermindClient] = None,
+        db_client: Optional[Any] = None,
         agent_timeout_ms: int = settings.agent_timeout_ms,
     ):
         """Initialize orchestrator agent.
@@ -94,12 +94,32 @@ class OrchestratorAgent:
         Args:
             cache_client: Redis cache client
             overmind_client: Overmind Lab tracing client
+            db_client: Aerospike database client for graph operations
             agent_timeout_ms: Timeout for agent execution in milliseconds
         """
         self.cache_client = cache_client or RedisClient()
         self.overmind_client = overmind_client
+        self.db_client = db_client
         self.agent_timeout_ms = agent_timeout_ms
         self.agent_timeout_seconds = agent_timeout_ms / 1000.0
+
+        # Initialize quality tracker with same cache and overmind clients
+        from src.self_improvement.quality_tracker import QualityTracker
+
+        self.quality_tracker = QualityTracker(
+            cache_client=self.cache_client,
+            overmind_client=self.overmind_client,
+        )
+
+        # Initialize enrichment scheduler if database client is available
+        self.enrichment_scheduler = None
+        if self.db_client:
+            from src.self_improvement.enrichment_scheduler import EnrichmentScheduler
+
+            self.enrichment_scheduler = EnrichmentScheduler(
+                db_client=self.db_client,
+                overmind_client=self.overmind_client,
+            )
 
     async def enrich_song(self, song_name: str) -> EnrichmentResult:
         """Main entry point for song enrichment.
@@ -139,13 +159,17 @@ class OrchestratorAgent:
             logger.info(f"Cache miss for song: '{song_name}', dispatching agents")
             results = await self.dispatch_agents(song_name, trace)
 
-            # Step 4: Merge results with conflict resolution
+            # Step 4: Analyze data quality and update rankings
+            quality_metrics = self.quality_tracker.analyze_data_quality(results)
+            self.quality_tracker.update_source_rankings(quality_metrics)
+
+            # Step 5: Merge results with conflict resolution (using updated rankings)
             merged_data = self.merge_results(results)
 
-            # Step 5: Calculate overall completeness
+            # Step 6: Calculate overall completeness
             completeness_score = self._calculate_overall_completeness(merged_data)
 
-            # Step 6: Create enrichment result
+            # Step 7: Create enrichment result
             # Note: Graph persistence would happen here in full implementation
             # For now, we'll create placeholder node IDs
             graph_node_ids = [uuid4()]  # Placeholder for song node
@@ -158,7 +182,35 @@ class OrchestratorAgent:
                 request_id=request_id,
             )
 
-            # Step 7: Cache result
+            # Step 8: Identify incomplete nodes and schedule proactive enrichment
+            if self.enrichment_scheduler:
+                try:
+                    enrichment_tasks = self.enrichment_scheduler.identify_incomplete_nodes(
+                        graph_node_ids
+                    )
+                    if enrichment_tasks:
+                        await self.enrichment_scheduler.schedule_proactive_enrichment(
+                            enrichment_tasks
+                        )
+                        logger.info(f"Scheduled {len(enrichment_tasks)} proactive enrichment tasks")
+
+                        # Log self-improvement activity to Overmind Lab
+                        if self.overmind_client:
+                            self.overmind_client.log_event(
+                                "self_improvement_cycle_complete",
+                                {
+                                    "request_id": str(request_id),
+                                    "song_name": song_name,
+                                    "enrichment_tasks_scheduled": len(enrichment_tasks),
+                                    "completeness_score": completeness_score,
+                                    "quality_metrics_updated": True,
+                                    "timestamp": datetime.utcnow().isoformat(),
+                                },
+                            )
+                except Exception as e:
+                    logger.warning(f"Failed to schedule proactive enrichment: {e}")
+
+            # Step 9: Cache result
             cache_data = {
                 "graph_node_ids": [str(nid) for nid in graph_node_ids],
                 "merged_data": merged_data,
@@ -166,7 +218,7 @@ class OrchestratorAgent:
             }
             self.cache_client.set(cache_key, cache_data, ttl=settings.cache_ttl_seconds)
 
-            # Step 8: End trace
+            # Step 10: End trace
             if trace:
                 trace.end_trace("success")
 
@@ -458,9 +510,7 @@ class OrchestratorAgent:
 
         return merged_song
 
-    def _resolve_field_conflict(
-        self, field_name: str, candidates: List[Dict[str, Any]]
-    ) -> Any:
+    def _resolve_field_conflict(self, field_name: str, candidates: List[Dict[str, Any]]) -> Any:
         """Resolve conflict for a specific field using appropriate strategy.
 
         Args:
@@ -563,14 +613,9 @@ class OrchestratorAgent:
         Returns:
             Quality score between 0.0 and 1.0
         """
-        # Placeholder quality rankings (would come from self-improvement engine)
-        quality_rankings = {
-            "spotify": 0.9,
-            "musicbrainz": 0.95,
-            "lastfm": 0.8,
-            "scraper": 0.7,
-        }
-        return quality_rankings.get(source_name, 0.5)
+        # Get quality from self-improvement engine
+        quality_report = self.quality_tracker.get_source_quality_report()
+        return quality_report.get_quality(source_name)
 
     def _calculate_overall_completeness(self, merged_data: Dict[str, Any]) -> float:
         """Calculate overall completeness score for merged data.

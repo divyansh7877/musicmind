@@ -1,6 +1,5 @@
 """Aerospike Graph database client wrapper with connection pooling and retry logic."""
 
-import asyncio
 import logging
 import time
 from typing import Any, Dict, List, Optional
@@ -254,7 +253,7 @@ class AerospikeClient:
         scan = self._client.scan(self.namespace, edge_type if edge_type else None)
 
         def callback(input_tuple):
-            (key, metadata, record) = input_tuple
+            key, metadata, record = input_tuple
             if record.get("from_node_id") == node_id_str:
                 to_node_id = record.get("to_node_id")
                 if to_node_id:
@@ -296,7 +295,7 @@ class AerospikeClient:
         scan = self._client.scan(self.namespace, node_type)
 
         def callback(input_tuple):
-            (key, metadata, record) = input_tuple
+            key, metadata, record = input_tuple
             if record.get(property_key) == property_value:
                 matching_nodes.append(record)
 
@@ -321,7 +320,7 @@ class AerospikeClient:
         for node_type in node_types:
             key = (self.namespace, node_type, node_id_str)
             try:
-                (key, metadata, record) = self._client.get(key)
+                key, metadata, record = self._client.get(key)
                 if record:
                     return True
             except Exception:
@@ -346,7 +345,7 @@ class AerospikeClient:
         for node_type in node_types:
             key = (self.namespace, node_type, node_id_str)
             try:
-                (key, metadata, record) = self._client.get(key)
+                key, metadata, record = self._client.get(key)
                 if record:
                     return record
             except Exception:

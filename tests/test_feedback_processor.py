@@ -2,8 +2,8 @@
 
 import pytest
 from datetime import datetime
-from unittest.mock import MagicMock, Mock, patch
-from uuid import UUID, uuid4
+from unittest.mock import MagicMock
+from uuid import uuid4
 
 from src.self_improvement.feedback_processor import (
     FeedbackProcessor,
@@ -279,9 +279,7 @@ class TestFeedbackProcessor:
         assert mock_quality_tracker._load_metrics.called
         assert mock_quality_tracker.persist_metrics.called
 
-    def test_process_correction_feedback(
-        self, processor, mock_db_client, mock_quality_tracker
-    ):
+    def test_process_correction_feedback(self, processor, mock_db_client, mock_quality_tracker):
         """Test processing correction feedback updates node and penalizes sources."""
         node_id = uuid4()
         user_id = uuid4()
@@ -476,9 +474,7 @@ class TestFeedbackProcessor:
         call_args = mock_cache_client.set.call_args
         assert call_args[1]["ttl"] == 30 * 24 * 60 * 60
 
-    def test_feedback_logged_to_overmind(
-        self, processor, mock_db_client, mock_overmind_client
-    ):
+    def test_feedback_logged_to_overmind(self, processor, mock_db_client, mock_overmind_client):
         """Test that feedback is logged to Overmind Lab."""
         node_id = uuid4()
         user_id = uuid4()
@@ -494,9 +490,7 @@ class TestFeedbackProcessor:
 
         # Mock quality metrics
         mock_quality_tracker = processor.quality_tracker
-        mock_quality_tracker._load_metrics.return_value = QualityMetrics(
-            source_name="spotify"
-        )
+        mock_quality_tracker._load_metrics.return_value = QualityMetrics(source_name="spotify")
 
         # Create feedback
         feedback = UserFeedback(

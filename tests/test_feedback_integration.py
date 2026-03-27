@@ -9,7 +9,6 @@ from src.database.aerospike_client import AerospikeClient
 from src.self_improvement.enrichment_scheduler import EnrichmentScheduler
 from src.self_improvement.feedback_processor import FeedbackProcessor, UserFeedback
 from src.self_improvement.quality_tracker import QualityMetrics, QualityTracker
-from src.tracing.overmind_client import OvermindClient
 
 
 class TestFeedbackIntegration:
@@ -41,9 +40,7 @@ class TestFeedbackIntegration:
         )
 
     @pytest.fixture
-    def feedback_processor(
-        self, mock_db_client, quality_tracker, enrichment_scheduler
-    ):
+    def feedback_processor(self, mock_db_client, quality_tracker, enrichment_scheduler):
         """Create feedback processor with real quality tracker."""
         cache_client = MagicMock()
         overmind_client = MagicMock()
@@ -281,9 +278,7 @@ class TestFeedbackIntegration:
         # Verify metrics were updated multiple times
         assert quality_tracker.cache_client.set.call_count >= 3
 
-    def test_feedback_processing_with_overmind_logging(
-        self, feedback_processor, mock_db_client
-    ):
+    def test_feedback_processing_with_overmind_logging(self, feedback_processor, mock_db_client):
         """Test that feedback processing logs to Overmind Lab."""
         node_id = uuid4()
         user_id = uuid4()

@@ -1,11 +1,9 @@
 """Quality tracker for monitoring and learning from data source performance."""
 
 import logging
-import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from config.settings import settings
 from src.cache.redis_client import RedisClient
 from src.tracing.overmind_client import OvermindClient
 
@@ -117,8 +115,7 @@ class SourceQualityReport:
             List of (source_name, accuracy_score) tuples sorted by score descending
         """
         rankings = [
-            (source_name, metrics.accuracy_score)
-            for source_name, metrics in self.metrics.items()
+            (source_name, metrics.accuracy_score) for source_name, metrics in self.metrics.items()
         ]
         return sorted(rankings, key=lambda x: x[1], reverse=True)
 
@@ -289,9 +286,7 @@ class QualityTracker:
 
         return metrics
 
-    def _update_moving_average(
-        self, current_avg: float, new_value: float, alpha: float
-    ) -> float:
+    def _update_moving_average(self, current_avg: float, new_value: float, alpha: float) -> float:
         """Update exponential moving average.
 
         Args:
@@ -444,7 +439,7 @@ class QualityTracker:
         report = SourceQualityReport(metrics_dict)
 
         logger.info(
-            f"Quality rankings: "
+            "Quality rankings: "
             + ", ".join(f"{name}={score:.2f}" for name, score in report.rankings)
         )
 
@@ -474,9 +469,7 @@ class QualityTracker:
             self.overmind_client.log_event(
                 "source_rankings_updated",
                 {
-                    "rankings": [
-                        {"source": name, "score": score} for name, score in rankings
-                    ],
+                    "rankings": [{"source": name, "score": score} for name, score in rankings],
                     "timestamp": datetime.utcnow().isoformat(),
                 },
             )

@@ -1,6 +1,5 @@
 """Unit tests for orchestrator agent."""
 
-import asyncio
 from datetime import datetime
 from uuid import uuid4
 
@@ -8,7 +7,6 @@ import pytest
 
 from src.agents.orchestrator import AgentResult, EnrichmentResult, OrchestratorAgent
 from src.cache.redis_client import RedisClient
-from src.tracing.overmind_client import OvermindClient
 
 
 class MockRedisClient:
@@ -108,7 +106,7 @@ async def test_enrich_song_basic(orchestrator):
 async def test_enrich_song_cache_hit(orchestrator, mock_cache):
     """Test cache hit scenario."""
     # First enrichment
-    result1 = await orchestrator.enrich_song("Test Song")
+    await orchestrator.enrich_song("Test Song")
 
     # Second enrichment should hit cache
     result2 = await orchestrator.enrich_song("Test Song")
@@ -211,6 +209,26 @@ def test_merge_results_with_failures(orchestrator):
 
 def test_merge_song_data_conflict_resolution(orchestrator):
     """Test conflict resolution for song data."""
+    # Pre-populate quality metrics so musicbrainz has higher quality
+    from src.self_improvement.quality_tracker import QualityMetrics
+
+    spotify_metrics = QualityMetrics(
+        source_name="spotify",
+        completeness_avg=0.7,
+        accuracy_score=0.6,
+        success_rate=0.9,
+        total_requests=10,
+    )
+    musicbrainz_metrics = QualityMetrics(
+        source_name="musicbrainz",
+        completeness_avg=0.9,
+        accuracy_score=0.9,
+        success_rate=0.95,
+        total_requests=10,
+    )
+    orchestrator.quality_tracker.persist_metrics(spotify_metrics)
+    orchestrator.quality_tracker.persist_metrics(musicbrainz_metrics)
+
     results = [
         AgentResult(
             agent_name="spotify",
@@ -311,7 +329,7 @@ def test_calculate_overall_completeness(orchestrator):
 @pytest.mark.asyncio
 async def test_overmind_tracing(orchestrator, mock_overmind):
     """Test Overmind Lab tracing integration."""
-    result = await orchestrator.enrich_song("Test Song")
+    await orchestrator.enrich_song("Test Song")
 
     # Should have created a trace
     assert len(mock_overmind.traces) > 0

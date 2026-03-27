@@ -1,7 +1,7 @@
 """Integration tests for Spotify agent with orchestrator."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -21,15 +21,13 @@ def mock_spotify_search_response():
                     "name": "Mr. Brightside",
                     "duration_ms": 222973,
                     "popularity": 89,
-                    "artists": [
-                        {"id": "0C0XlULifJtAgn6ZNCW2eu", "name": "The Killers"}
-                    ],
+                    "artists": [{"id": "0C0XlULifJtAgn6ZNCW2eu", "name": "The Killers"}],
                     "album": {
                         "id": "4piJq7R3gjUOxnYs6lDCTg",
                         "name": "Hot Fuss",
                         "album_type": "album",
                         "release_date": "2004-06-07",
-                    }
+                    },
                 }
             ]
         }
@@ -45,9 +43,7 @@ def mock_spotify_artist_response():
         "genres": ["alternative rock", "indie rock", "modern rock", "rock"],
         "popularity": 82,
         "followers": {"total": 8500000},
-        "images": [
-            {"url": "https://i.scdn.co/image/ab6761610000e5eb12345"}
-        ],
+        "images": [{"url": "https://i.scdn.co/image/ab6761610000e5eb12345"}],
     }
 
 
@@ -61,9 +57,7 @@ def mock_spotify_album_response():
         "release_date": "2004-06-07",
         "total_tracks": 11,
         "label": "Island Records",
-        "images": [
-            {"url": "https://i.scdn.co/image/ab67616d0000b27312345"}
-        ],
+        "images": [{"url": "https://i.scdn.co/image/ab67616d0000b27312345"}],
     }
 
 
@@ -158,6 +152,7 @@ async def test_spotify_agent_handles_not_found():
 
     # Mock Spotify API to return no results
     with patch("src.agents.spotify_agent.SpotifyAgent._make_request") as mock_request:
+
         async def mock_make_request(method, endpoint, params=None, max_retries=3):
             if endpoint == "search":
                 return {"tracks": {"items": []}}
@@ -182,6 +177,7 @@ async def test_spotify_agent_rate_limiting():
     # Mock authentication
     agent.access_token = "test_token"
     from datetime import datetime, timedelta
+
     agent.token_expires_at = datetime.utcnow() + timedelta(hours=1)
 
     # Mock HTTP client
@@ -211,6 +207,7 @@ async def test_spotify_agent_token_refresh():
 
     # Set expired token
     from datetime import datetime, timedelta
+
     agent.access_token = "old_token"
     agent.token_expires_at = datetime.utcnow() - timedelta(seconds=1)
 
@@ -227,8 +224,10 @@ async def test_spotify_agent_token_refresh():
     api_response.status_code = 200
     api_response.json.return_value = {"data": "test"}
 
-    with patch.object(agent.http_client, "post", return_value=auth_response), \
-         patch.object(agent.http_client, "request", return_value=api_response):
+    with (
+        patch.object(agent.http_client, "post", return_value=auth_response),
+        patch.object(agent.http_client, "request", return_value=api_response),
+    ):
 
         result = await agent._make_request("GET", "test")
 
@@ -255,6 +254,7 @@ async def test_spotify_agent_parallel_execution():
         # Simulate some work
         await asyncio.sleep(0.1)
         from src.agents.orchestrator import AgentResult
+
         return AgentResult(
             agent_name=agent_name,
             status="success",
@@ -266,6 +266,7 @@ async def test_spotify_agent_parallel_execution():
         # Mock the trace context
         from src.tracing.overmind_client import TraceContext
         from uuid import uuid4
+
         trace = TraceContext(uuid4(), "test")
 
         await orchestrator.dispatch_agents("Test Song", trace)

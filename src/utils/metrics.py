@@ -3,7 +3,6 @@
 from typing import Any, Dict, Set
 from pydantic import BaseModel
 
-
 # Define critical fields for each entity type with higher weights
 CRITICAL_FIELDS: Dict[str, Set[str]] = {
     "Song": {"title", "duration_ms"},

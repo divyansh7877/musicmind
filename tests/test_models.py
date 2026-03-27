@@ -8,7 +8,6 @@ from src.models.nodes import (
     Song,
     Artist,
     Album,
-    RecordLabel,
     Instrument,
     Venue,
     Concert,
@@ -62,9 +61,7 @@ class TestSongNode:
 
     def test_song_with_audio_features(self):
         """Test creating a song with audio features."""
-        audio_features = AudioFeatures(
-            tempo=120.0, key=5, mode=1, energy=0.8, danceability=0.7
-        )
+        audio_features = AudioFeatures(tempo=120.0, key=5, mode=1, energy=0.8, danceability=0.7)
         song = Song(title="Test Song", spotify_id="test123", audio_features=audio_features)
         assert song.audio_features.tempo == 120.0
         assert song.audio_features.key == 5

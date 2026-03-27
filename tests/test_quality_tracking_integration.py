@@ -4,7 +4,6 @@ import pytest
 from unittest.mock import Mock, patch
 
 from src.agents.orchestrator import OrchestratorAgent, AgentResult
-from src.self_improvement.quality_tracker import QualityTracker
 
 
 @pytest.mark.asyncio
@@ -35,9 +34,7 @@ class TestQualityTrackingIntegration:
             overmind_client=mock_overmind_client,
         )
 
-    async def test_quality_metrics_updated_after_enrichment(
-        self, orchestrator, mock_cache_client
-    ):
+    async def test_quality_metrics_updated_after_enrichment(self, orchestrator, mock_cache_client):
         """Test that quality metrics are updated after song enrichment."""
         # Track cache calls to verify metrics are persisted
         cache_calls = []
@@ -64,9 +61,7 @@ class TestQualityTrackingIntegration:
             assert result.status == "success"
 
             # Verify quality metrics were persisted
-            quality_metric_calls = [
-                call for call in cache_calls if "quality_metrics" in call[0]
-            ]
+            quality_metric_calls = [call for call in cache_calls if "quality_metrics" in call[0]]
             assert len(quality_metric_calls) > 0
 
             # Verify metrics contain expected data
@@ -189,9 +184,7 @@ class TestQualityTrackingIntegration:
             assert updated_metrics["completeness_avg"] > 0.4  # Should increase
             assert updated_metrics["accuracy_score"] > 0.5  # Should increase
 
-    async def test_failed_requests_decrease_quality(
-        self, orchestrator, mock_cache_client
-    ):
+    async def test_failed_requests_decrease_quality(self, orchestrator, mock_cache_client):
         """Test that failed requests decrease quality scores."""
         # Start with good metrics
         initial_metrics = {

@@ -2,14 +2,12 @@
 
 import asyncio
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
+from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
 
 from src.agents.spotify_agent import RateLimiter, SpotifyAgent, SpotifyResult
-from src.models.nodes import Album, Artist, AudioFeatures, Song
+from src.models.nodes import Album, Artist, Song
 
 
 @pytest.fixture
@@ -30,15 +28,13 @@ def mock_track_data():
         "name": "Test Song",
         "duration_ms": 180000,
         "popularity": 75,
-        "artists": [
-            {"id": "artist123", "name": "Test Artist"}
-        ],
+        "artists": [{"id": "artist123", "name": "Test Artist"}],
         "album": {
             "id": "album123",
             "name": "Test Album",
             "album_type": "album",
             "release_date": "2020-01-15",
-        }
+        },
     }
 
 
@@ -212,7 +208,7 @@ class TestSpotifyAgent:
         with patch.object(
             spotify_agent.http_client,
             "request",
-            side_effect=[rate_limit_response, success_response]
+            side_effect=[rate_limit_response, success_response],
         ):
             result = await spotify_agent._make_request("GET", "test/endpoint")
 
@@ -235,9 +231,7 @@ class TestSpotifyAgent:
         success_response.json.return_value = {"data": "test"}
 
         with patch.object(
-            spotify_agent.http_client,
-            "request",
-            side_effect=[error_response, success_response]
+            spotify_agent.http_client, "request", side_effect=[error_response, success_response]
         ):
             result = await spotify_agent._make_request("GET", "test/endpoint")
 
@@ -260,11 +254,7 @@ class TestSpotifyAgent:
     @pytest.mark.asyncio
     async def test_search_track_success(self, spotify_agent, mock_track_data):
         """Test successful track search."""
-        mock_response = {
-            "tracks": {
-                "items": [mock_track_data]
-            }
-        }
+        mock_response = {"tracks": {"items": [mock_track_data]}}
 
         with patch.object(spotify_agent, "_make_request", return_value=mock_response):
             result = await spotify_agent.search_track("Test Song")
@@ -276,11 +266,7 @@ class TestSpotifyAgent:
     @pytest.mark.asyncio
     async def test_search_track_not_found(self, spotify_agent):
         """Test track search with no results."""
-        mock_response = {
-            "tracks": {
-                "items": []
-            }
-        }
+        mock_response = {"tracks": {"items": []}}
 
         with patch.object(spotify_agent, "_make_request", return_value=mock_response):
             result = await spotify_agent.search_track("Nonexistent Song")
@@ -328,10 +314,12 @@ class TestSpotifyAgent:
     ):
         """Test complete Spotify data fetch with all components."""
         # Mock all API calls
-        with patch.object(spotify_agent, "search_track", return_value=mock_track_data), \
-             patch.object(spotify_agent, "get_audio_features", return_value=mock_audio_features), \
-             patch.object(spotify_agent, "get_artist_details", return_value=mock_artist_data), \
-             patch.object(spotify_agent, "get_album_details", return_value=mock_album_data):
+        with (
+            patch.object(spotify_agent, "search_track", return_value=mock_track_data),
+            patch.object(spotify_agent, "get_audio_features", return_value=mock_audio_features),
+            patch.object(spotify_agent, "get_artist_details", return_value=mock_artist_data),
+            patch.object(spotify_agent, "get_album_details", return_value=mock_album_data),
+        ):
 
             result = await spotify_agent.fetch_spotify_data("Test Song")
 
@@ -382,10 +370,12 @@ class TestSpotifyAgent:
     ):
         """Test Spotify data fetch with partial failures."""
         # Mock track search success, but album and audio features fail
-        with patch.object(spotify_agent, "search_track", return_value=mock_track_data), \
-             patch.object(spotify_agent, "get_audio_features", return_value=None), \
-             patch.object(spotify_agent, "get_artist_details", return_value=mock_artist_data), \
-             patch.object(spotify_agent, "get_album_details", return_value=None):
+        with (
+            patch.object(spotify_agent, "search_track", return_value=mock_track_data),
+            patch.object(spotify_agent, "get_audio_features", return_value=None),
+            patch.object(spotify_agent, "get_artist_details", return_value=mock_artist_data),
+            patch.object(spotify_agent, "get_album_details", return_value=None),
+        ):
 
             result = await spotify_agent.fetch_spotify_data("Test Song")
 

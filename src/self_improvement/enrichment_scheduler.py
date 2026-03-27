@@ -215,15 +215,11 @@ class EnrichmentScheduler:
                             },
                         )
 
-        logger.info(
-            f"Identified {len(enrichment_tasks)} incomplete nodes for enrichment"
-        )
+        logger.info(f"Identified {len(enrichment_tasks)} incomplete nodes for enrichment")
 
         return enrichment_tasks
 
-    def identify_stale_nodes(
-        self, node_types: Optional[List[str]] = None
-    ) -> List[EnrichmentTask]:
+    def identify_stale_nodes(self, node_types: Optional[List[str]] = None) -> List[EnrichmentTask]:
         """Identify stale nodes that haven't been enriched recently.
 
         Args:
@@ -243,7 +239,7 @@ class EnrichmentScheduler:
             scan = self.db_client._client.scan(self.db_client.namespace, node_type)
 
             def callback(input_tuple):
-                (key, metadata, record) = input_tuple
+                key, metadata, record = input_tuple
 
                 # Parse last_enriched timestamp
                 last_enriched_str = record.get("last_enriched")
@@ -271,9 +267,7 @@ class EnrichmentScheduler:
                         return
 
                     # Create low-priority task
-                    task = self._create_enrichment_task(
-                        node_id, node_type, record, is_stale=True
-                    )
+                    task = self._create_enrichment_task(node_id, node_type, record, is_stale=True)
                     if task:
                         stale_tasks.append(task)
                         self._processed_nodes.add(node_id)
@@ -358,9 +352,7 @@ class EnrichmentScheduler:
             last_enriched=last_enriched,
         )
 
-    def _identify_missing_fields(
-        self, node_type: str, node_data: Dict[str, Any]
-    ) -> List[str]:
+    def _identify_missing_fields(self, node_type: str, node_data: Dict[str, Any]) -> List[str]:
         """Identify missing fields for a node.
 
         Args:
@@ -437,9 +429,7 @@ class EnrichmentScheduler:
 
         return missing
 
-    def _determine_target_agents(
-        self, node_type: str, missing_fields: List[str]
-    ) -> List[str]:
+    def _determine_target_agents(self, node_type: str, missing_fields: List[str]) -> List[str]:
         """Determine which agents can provide missing fields.
 
         Args:
@@ -492,9 +482,7 @@ class EnrichmentScheduler:
 
         return None
 
-    async def schedule_proactive_enrichment(
-        self, tasks: List[EnrichmentTask]
-    ) -> None:
+    async def schedule_proactive_enrichment(self, tasks: List[EnrichmentTask]) -> None:
         """Schedule enrichment tasks for execution.
 
         Args:
@@ -602,14 +590,10 @@ class EnrichmentScheduler:
                 f"Scheduling {len(low_priority_tasks)} low priority tasks "
                 f"for execution in 24 hours"
             )
-            asyncio.create_task(
-                self._execute_delayed_tasks(low_priority_tasks, delay=24 * 3600)
-            )
+            asyncio.create_task(self._execute_delayed_tasks(low_priority_tasks, delay=24 * 3600))
             self._task_queue[EnrichmentPriority.LOW] = []
 
-    async def _execute_delayed_tasks(
-        self, tasks: List[EnrichmentTask], delay: int
-    ) -> None:
+    async def _execute_delayed_tasks(self, tasks: List[EnrichmentTask], delay: int) -> None:
         """Execute tasks after a delay.
 
         Args:

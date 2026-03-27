@@ -116,9 +116,7 @@ class Album(BaseModel):
     id: UUID = Field(default_factory=uuid4, description="Unique identifier")
     title: str = Field(..., min_length=1, description="Album title")
     release_date: Optional[date] = Field(None, description="Release date")
-    album_type: str = Field(
-        ..., description="Album type: album, single, compilation, or ep"
-    )
+    album_type: str = Field(..., description="Album type: album, single, compilation, or ep")
     total_tracks: Optional[int] = Field(None, gt=0, description="Total number of tracks")
     spotify_id: Optional[str] = Field(None, description="Spotify album ID")
     musicbrainz_id: Optional[UUID] = Field(None, description="MusicBrainz release ID")

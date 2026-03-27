@@ -141,5 +141,5 @@ def test_redis_client_auto_reconnect(mock_redis):
     assert client._client is None
 
     # Next operation should auto-reconnect
-    result = client.get("test_key")
+    client.get("test_key")
     assert client._client is not None

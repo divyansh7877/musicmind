@@ -1,6 +1,5 @@
 """Unit tests for metrics calculation utilities."""
 
-import pytest
 from datetime import date
 
 from src.models.nodes import Song, Artist, Album, AudioFeatures

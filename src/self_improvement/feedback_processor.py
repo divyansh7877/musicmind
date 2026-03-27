@@ -14,7 +14,7 @@ from src.self_improvement.enrichment_scheduler import (
     EnrichmentScheduler,
     EnrichmentTask,
 )
-from src.self_improvement.quality_tracker import QualityMetrics, QualityTracker
+from src.self_improvement.quality_tracker import QualityTracker
 from src.tracing.overmind_client import OvermindClient
 
 logger = logging.getLogger(__name__)
@@ -26,13 +26,9 @@ class UserFeedback(BaseModel):
     user_id: UUID = Field(..., description="User identifier")
     node_id: UUID = Field(..., description="Graph node identifier")
     feedback_type: str = Field(..., description="Type of feedback")
-    feedback_value: int = Field(
-        default=0, ge=-1, le=1, description="Feedback value (-1, 0, or 1)"
-    )
+    feedback_value: int = Field(default=0, ge=-1, le=1, description="Feedback value (-1, 0, or 1)")
     comment: Optional[str] = Field(None, description="Optional comment or correction")
-    timestamp: datetime = Field(
-        default_factory=datetime.utcnow, description="Feedback timestamp"
-    )
+    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Feedback timestamp")
 
     @field_validator("feedback_type")
     @classmethod
@@ -71,9 +67,7 @@ class IssueReport(BaseModel):
     node_id: UUID = Field(..., description="Graph node identifier")
     user_id: UUID = Field(..., description="User who reported the issue")
     description: str = Field(..., description="Issue description")
-    timestamp: datetime = Field(
-        default_factory=datetime.utcnow, description="Report timestamp"
-    )
+    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Report timestamp")
     status: str = Field(default="pending", description="Report status")
 
     def to_dict(self) -> Dict[str, Any]:
@@ -426,9 +420,7 @@ class FeedbackProcessor:
             logger.error(f"Failed to update node visibility: {e}")
             raise
 
-    def _parse_correction(
-        self, comment: str, node_type: str
-    ) -> Optional[Dict[str, Any]]:
+    def _parse_correction(self, comment: str, node_type: str) -> Optional[Dict[str, Any]]:
         """Parse correction from user comment.
 
         Args:
@@ -472,9 +464,7 @@ class FeedbackProcessor:
 
         return corrected_data if corrected_data else None
 
-    def _create_issue_report(
-        self, node_id: UUID, user_id: UUID, description: str
-    ) -> None:
+    def _create_issue_report(self, node_id: UUID, user_id: UUID, description: str) -> None:
         """Create an issue report for manual review.
 
         Args:

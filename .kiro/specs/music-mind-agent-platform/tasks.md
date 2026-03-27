@@ -371,14 +371,14 @@ This implementation plan breaks down the MusicMind agent platform into manageabl
     - Verify quality scores are updated appropriately
     - Verify events are logged to Overmind Lab
 
-- [ ] 14. Wire self-improvement engine into orchestrator
-  - [ ] 14.1 Integrate quality tracking into enrichment flow
+- [-] 14. Wire self-improvement engine into orchestrator
+  - [x] 14.1 Integrate quality tracking into enrichment flow
     - Call `analyze_data_quality()` after merging results
     - Update source rankings after each enrichment
     - Use rankings in conflict resolution
     - _Requirements: 4.1, 4.3, 17.2, 17.3_
   
-  - [ ] 14.2 Integrate proactive enrichment into enrichment flow
+  - [x] 14.2 Integrate proactive enrichment into enrichment flow
     - Call `identify_incomplete_nodes()` after persisting to graph
     - Schedule enrichment tasks for incomplete nodes
     - Log self-improvement activities to Overmind Lab

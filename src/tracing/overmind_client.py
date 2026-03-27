@@ -154,9 +154,7 @@ class OvermindClient:
 
         return trace
 
-    def log_agent_dispatch(
-        self, trace: TraceContext, agent_name: str, song_name: str
-    ) -> Span:
+    def log_agent_dispatch(self, trace: TraceContext, agent_name: str, song_name: str) -> Span:
         """Log agent dispatch as a child span.
 
         Args:
@@ -200,7 +198,9 @@ class OvermindClient:
                 f"completeness={completeness:.2f}"
             )
 
-    def log_metric(self, metric_name: str, value: float, tags: Optional[Dict[str, str]] = None) -> None:
+    def log_metric(
+        self, metric_name: str, value: float, tags: Optional[Dict[str, str]] = None
+    ) -> None:
         """Log a metric to Overmind Lab.
 
         Args:
