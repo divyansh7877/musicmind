@@ -57,6 +57,12 @@ class Settings(BaseSettings):
         default="https://api.overmind.com", description="Overmind Lab endpoint"
     )
 
+    # CORS / Frontend
+    cors_origins: str = Field(
+        default="*",
+        description="Comma-separated allowed CORS origins (use * for dev)",
+    )
+
     # Rate Limiting
     rate_limit_requests_per_minute: int = Field(
         default=10, description="Rate limit requests per minute per user"

@@ -1,0 +1,73 @@
+# TrueFoundry deployment configuration for MusicMind Agent Platform
+# Usage:
+#   1. pip install truefoundry
+#   2. tfy login --host <your-truefoundry-url>
+#   3. python deploy.py --workspace <workspace-fqn>
+
+services:
+  backend:
+    name: musicmind-backend
+    image:
+      dockerfile: Dockerfile
+      build_context: .
+    ports:
+      - port: 8000
+        expose: true
+    resources:
+      cpu_request: 0.5
+      cpu_limit: 1.0
+      memory_request: 1024
+      memory_limit: 2048
+      ephemeral_storage_request: 512
+      ephemeral_storage_limit: 1024
+    env:
+      APP_ENV: production
+      APP_HOST: "0.0.0.0"
+      APP_PORT: "8000"
+      AEROSPIKE_HOST: musicmind-aerospike
+      AEROSPIKE_PORT: "3000"
+      REDIS_HOST: musicmind-redis
+      REDIS_PORT: "6379"
+      CACHE_TTL_SECONDS: "3600"
+      AGENT_TIMEOUT_MS: "30000"
+      COMPLETENESS_THRESHOLD: "0.7"
+      ENRICHMENT_STALE_DAYS: "30"
+      RATE_LIMIT_REQUESTS_PER_MINUTE: "10"
+    secrets:
+      - SPOTIFY_CLIENT_ID
+      - SPOTIFY_CLIENT_SECRET
+      - LASTFM_API_KEY
+      - SECRET_KEY
+      - OVERMIND_API_KEY
+    replicas:
+      min: 1
+      max: 3
+    healthcheck:
+      path: /health
+      port: 8000
+      initial_delay_seconds: 10
+      period_seconds: 30
+
+  frontend:
+    name: musicmind-frontend
+    image:
+      dockerfile: frontend/Dockerfile
+      build_context: frontend
+      build_args:
+        VITE_API_URL: "https://<backend-host>"
+    ports:
+      - port: 80
+        expose: true
+    resources:
+      cpu_request: 0.25
+      cpu_limit: 0.5
+      memory_request: 256
+      memory_limit: 512
+    replicas:
+      min: 1
+      max: 2
+    healthcheck:
+      path: /
+      port: 80
+      initial_delay_seconds: 5
+      period_seconds: 30

@@ -1,0 +1,102 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: musicmind-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=production
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8000
+      - AEROSPIKE_HOST=aerospike
+      - AEROSPIKE_PORT=3000
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      aerospike:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - musicmind-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://localhost:8000
+    container_name: musicmind-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - musicmind-network
+    restart: unless-stopped
+
+  aerospike:
+    image: aerospike/aerospike-server-enterprise:latest
+    container_name: musicmind-aerospike
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+      - "3002:3002"
+    volumes:
+      - aerospike-data:/opt/aerospike/data
+      - ./config/aerospike.conf:/etc/aerospike/aerospike.conf:ro
+    environment:
+      - NAMESPACE=musicmind
+    healthcheck:
+      test: ["CMD", "asinfo", "-v", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - musicmind-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: musicmind-redis
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+      --save 60 1000
+      --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - musicmind-network
+    restart: unless-stopped
+
+volumes:
+  aerospike-data:
+    driver: local
+  redis-data:
+    driver: local
+
+networks:
+  musicmind-network:
+    driver: bridge
