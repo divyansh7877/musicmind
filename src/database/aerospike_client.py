@@ -9,6 +9,12 @@ import aerospike
 from pydantic import BaseModel, ValidationError
 
 from config.settings import settings
+from src.errors.exceptions import (
+    ConcurrentWriteConflictError,
+    DatabaseConnectionError,
+    DatabaseError,
+)
+from src.errors.handlers import log_error_to_overmind
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +29,7 @@ class AerospikeClient:
         namespace: str = settings.aerospike_namespace,
         max_retries: int = 3,
         initial_backoff: float = 0.5,
+        overmind_client=None,
     ):
         """Initialize Aerospike client with connection pooling.
 
@@ -32,12 +39,14 @@ class AerospikeClient:
             namespace: Aerospike namespace
             max_retries: Maximum number of retry attempts
             initial_backoff: Initial backoff delay in seconds
+            overmind_client: Optional Overmind client for error logging
         """
         self.host = host
         self.port = port
         self.namespace = namespace
         self.max_retries = max_retries
         self.initial_backoff = initial_backoff
+        self.overmind_client = overmind_client
         self._client: Optional[aerospike.Client] = None
 
     def connect(self) -> None:
@@ -63,10 +72,11 @@ class AerospikeClient:
                 if attempt < self.max_retries - 1:
                     time.sleep(backoff)
                 else:
-                    logger.error("Failed to connect to Aerospike after all retries")
-                    raise ConnectionError(
+                    err = DatabaseConnectionError(
                         f"Could not connect to Aerospike at {self.host}:{self.port}"
-                    ) from e
+                    )
+                    log_error_to_overmind(self.overmind_client, "aerospike_connect", err)
+                    raise err from e
 
     def disconnect(self) -> None:
         """Close connection to Aerospike."""
@@ -81,21 +91,28 @@ class AerospikeClient:
             self.connect()
 
     def upsert_node(
-        self, node_type: str, properties: Dict[str, Any], node_model: Optional[type] = None
+        self,
+        node_type: str,
+        properties: Dict[str, Any],
+        node_model: Optional[type] = None,
+        expected_generation: Optional[int] = None,
     ) -> UUID:
-        """Insert or update a graph node with validation.
+        """Insert or update a graph node with validation and optional optimistic locking.
 
         Args:
             node_type: Type of node (Song, Artist, Album, etc.)
             properties: Node properties as dictionary
             node_model: Optional Pydantic model for validation
+            expected_generation: If set, enables optimistic locking. The write
+                will only succeed if the record's current generation matches.
 
         Returns:
             UUID of the created or updated node
 
         Raises:
             ValidationError: If properties fail validation
-            ConnectionError: If database connection fails
+            ConcurrentWriteConflictError: If optimistic lock fails
+            DatabaseError: If database operation fails after retries
         """
         self._ensure_connected()
 
@@ -124,12 +141,34 @@ class AerospikeClient:
         # Prepare bins (Aerospike's term for fields)
         bins = self._prepare_bins(properties)
 
+        # Build write policy for optimistic locking
+        write_policy = {}
+        if expected_generation is not None:
+            write_policy = {
+                "gen": aerospike.POLICY_GEN_EQ,
+                "generation": expected_generation,
+            }
+
         # Upsert with retry logic
         for attempt in range(self.max_retries):
             try:
-                self._client.put(key, bins)
+                if write_policy:
+                    meta = {"gen": expected_generation}
+                    self._client.put(key, bins, meta=meta, policy=write_policy)
+                else:
+                    self._client.put(key, bins)
                 logger.debug(f"Upserted {node_type} node with ID {node_id}")
                 return UUID(node_id)
+            except aerospike.exception.RecordGenerationError:
+                actual_gen = self._get_record_generation(key)
+                err = ConcurrentWriteConflictError(
+                    node_type=node_type,
+                    node_id=node_id,
+                    expected_gen=expected_generation or 0,
+                    actual_gen=actual_gen,
+                )
+                log_error_to_overmind(self.overmind_client, "upsert_node", err)
+                raise err
             except Exception as e:
                 backoff = self.initial_backoff * (2**attempt)
                 logger.warning(
@@ -139,8 +178,29 @@ class AerospikeClient:
                 if attempt < self.max_retries - 1:
                     time.sleep(backoff)
                 else:
-                    logger.error(f"Failed to upsert {node_type} node after all retries")
-                    raise
+                    err = DatabaseError(
+                        f"Failed to upsert {node_type} node after all retries",
+                        operation="upsert_node",
+                    )
+                    log_error_to_overmind(self.overmind_client, "upsert_node", err)
+                    raise err from e
+
+    def _get_record_generation(self, key: tuple) -> int:
+        """Read the current generation counter for a record.
+
+        Args:
+            key: Aerospike record key tuple
+
+        Returns:
+            Current generation or 0 if record not found
+        """
+        try:
+            _, meta = self._client.exists(key)
+            if meta:
+                return meta.get("gen", 0)
+        except Exception:
+            pass
+        return 0
 
     def upsert_edge(
         self,
@@ -220,8 +280,12 @@ class AerospikeClient:
                 if attempt < self.max_retries - 1:
                     time.sleep(backoff)
                 else:
-                    logger.error(f"Failed to upsert {edge_type} edge after all retries")
-                    raise
+                    err = DatabaseError(
+                        f"Failed to upsert {edge_type} edge after all retries",
+                        operation="upsert_edge",
+                    )
+                    log_error_to_overmind(self.overmind_client, "upsert_edge", err)
+                    raise err from e
 
     def query_neighbors(
         self, node_id: UUID, edge_type: Optional[str] = None, depth: int = 1

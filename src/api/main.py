@@ -6,15 +6,23 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator
+from pydantic import ValidationError as PydanticValidationError
 
 from config.settings import settings
 from src.agents.orchestrator import OrchestratorAgent
 from src.cache.redis_client import RedisClient
 from src.database.aerospike_client import AerospikeClient
+from src.errors.exceptions import (
+    MusicMindError,
+    RateLimitError as MusicMindRateLimitError,
+    ServiceUnavailableError,
+)
+from src.errors.handlers import build_error_response, log_error_to_overmind
 from src.self_improvement.feedback_processor import FeedbackProcessor, UserFeedback
 from src.self_improvement.quality_tracker import QualityTracker
 from src.self_improvement.enrichment_scheduler import EnrichmentScheduler
@@ -117,6 +125,74 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- Global Exception Handlers ---
+
+
+@app.exception_handler(MusicMindError)
+async def musicmind_error_handler(request: Request, exc: MusicMindError):
+    """Handle all MusicMind domain errors with structured responses."""
+    log_error_to_overmind(overmind_client, operation=request.url.path, error=exc)
+
+    status_map = {
+        "AGENT_TIMEOUT": 504,
+        "RATE_LIMIT_EXCEEDED": 429,
+        "DATABASE_CONNECTION_ERROR": 503,
+        "SERVICE_UNAVAILABLE": 503,
+        "CONCURRENT_WRITE_CONFLICT": 409,
+        "VALIDATION_ERROR": 422,
+        "DATA_VALIDATION_ERROR": 422,
+    }
+    status_code = status_map.get(exc.error_code, 500)
+
+    headers = {}
+    if isinstance(exc, MusicMindRateLimitError) and exc.retry_after:
+        headers["Retry-After"] = str(exc.retry_after)
+
+    return JSONResponse(
+        status_code=status_code,
+        content=build_error_response(
+            error_code=exc.error_code,
+            message=exc.message,
+            details=exc.details,
+            retryable=exc.retryable,
+        ),
+        headers=headers,
+    )
+
+
+@app.exception_handler(PydanticValidationError)
+async def pydantic_validation_handler(request: Request, exc: PydanticValidationError):
+    """Handle Pydantic validation errors with structured responses."""
+    return JSONResponse(
+        status_code=422,
+        content=build_error_response(
+            error_code="VALIDATION_ERROR",
+            message="Request validation failed",
+            details={"errors": exc.errors()},
+            retryable=False,
+        ),
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Catch-all handler for unexpected errors."""
+    log_error_to_overmind(
+        overmind_client,
+        operation=request.url.path,
+        error=exc,
+        extra={"method": request.method},
+    )
+    return JSONResponse(
+        status_code=500,
+        content=build_error_response(
+            error_code="INTERNAL_ERROR",
+            message="An unexpected error occurred",
+            retryable=False,
+        ),
+    )
+
 
 # Security
 security = HTTPBearer()
@@ -238,7 +314,7 @@ async def search_song(
 ):
     """Search and enrich song data."""
     if not orchestrator:
-        raise HTTPException(status_code=503, detail="Orchestrator not available")
+        raise ServiceUnavailableError("orchestrator")
 
     try:
         result = await orchestrator.enrich_song(request.song_name)
@@ -251,6 +327,8 @@ async def search_song(
             completeness_score=result.completeness_score,
             error_message=result.error_message,
         )
+    except MusicMindError:
+        raise
     except Exception as e:
         logger.error(f"Search failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -265,11 +343,13 @@ async def traverse_graph(
 ):
     """Traverse graph from a node with depth limit."""
     if not graph_service:
-        raise HTTPException(status_code=503, detail="Graph service not available")
+        raise ServiceUnavailableError("graph_service")
 
     try:
         result = await graph_service.traverse_graph(node_id, request.max_depth)
         return result
+    except (MusicMindError, HTTPException):
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -285,7 +365,7 @@ async def submit_feedback(
 ):
     """Submit user feedback on data quality."""
     if not feedback_processor:
-        raise HTTPException(status_code=503, detail="Feedback processor not available")
+        raise ServiceUnavailableError("feedback_processor")
 
     try:
         feedback = UserFeedback(
@@ -299,6 +379,8 @@ async def submit_feedback(
         feedback_processor.process_user_feedback(feedback)
 
         return {"status": "success", "message": "Feedback processed"}
+    except (MusicMindError, HTTPException):
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -346,11 +428,13 @@ async def get_activity_feed(
 async def register(username: str, password: str, email: str):
     """Register a new user."""
     if not auth_service:
-        raise HTTPException(status_code=503, detail="Auth service not available")
+        raise ServiceUnavailableError("auth_service")
 
     try:
         tokens = await auth_service.register_user(username, password, email)
         return tokens
+    except (MusicMindError, HTTPException):
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

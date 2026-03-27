@@ -8,7 +8,9 @@ from uuid import UUID, uuid4
 
 from config.settings import settings
 from src.cache.redis_client import RedisClient
+from src.errors.handlers import log_error_to_overmind
 from src.tracing.overmind_client import OvermindClient, TraceContext
+from src.validation.data_validator import DataValidator
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +167,22 @@ class OrchestratorAgent:
 
             # Step 5: Merge results with conflict resolution (using updated rankings)
             merged_data = self.merge_results(results)
+
+            # Step 5.5: Validate merged data before persistence
+            merged_data, invalid_fields = DataValidator.validate_merged_data(merged_data)
+            if invalid_fields:
+                logger.info(
+                    f"Validation stripped {len(invalid_fields)} invalid fields from merged data"
+                )
+                if self.overmind_client:
+                    self.overmind_client.log_event(
+                        "data_validation",
+                        {
+                            "request_id": str(request_id),
+                            "song_name": song_name,
+                            "invalid_fields": invalid_fields,
+                        },
+                    )
 
             # Step 6: Calculate overall completeness
             completeness_score = self._calculate_overall_completeness(merged_data)
@@ -343,6 +361,12 @@ class OrchestratorAgent:
             response_time_ms = int((end_time - start_time) * 1000)
 
             logger.warning(f"Agent {agent_name} timed out after {response_time_ms}ms")
+            log_error_to_overmind(
+                self.overmind_client,
+                operation=f"agent_{agent_name}",
+                error=asyncio.TimeoutError(f"Agent {agent_name} timed out"),
+                extra={"agent_name": agent_name, "timeout_ms": self.agent_timeout_ms, "song_name": song_name},
+            )
             return AgentResult(
                 agent_name=agent_name,
                 status="failed",
@@ -357,6 +381,12 @@ class OrchestratorAgent:
             response_time_ms = int((end_time - start_time) * 1000)
 
             logger.error(f"Agent {agent_name} failed: {e}", exc_info=True)
+            log_error_to_overmind(
+                self.overmind_client,
+                operation=f"agent_{agent_name}",
+                error=e,
+                extra={"agent_name": agent_name, "song_name": song_name},
+            )
             return AgentResult(
                 agent_name=agent_name,
                 status="failed",
