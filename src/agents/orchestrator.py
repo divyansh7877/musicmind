@@ -486,19 +486,42 @@ class OrchestratorAgent:
             finally:
                 await mb_agent.close()
 
+        elif agent_name == "scraper":
+            from src.agents.scraper_agent import WebScraperAgent
+
+            scraper_agent = WebScraperAgent(overmind_client=self.overmind_client)
+            try:
+                scraper_result = await scraper_agent.scrape_web_data(song_name)
+
+                data = {}
+                if scraper_result.venues:
+                    data["venues"] = [v.model_dump() for v in scraper_result.venues]
+                if scraper_result.concerts:
+                    data["concerts"] = [
+                        c.model_dump() for c in scraper_result.concerts
+                    ]
+                if scraper_result.setlists:
+                    data["setlists"] = scraper_result.setlists
+
+                status = "success" if scraper_result.status == "success" else scraper_result.status
+
+                return AgentResult(
+                    agent_name=agent_name,
+                    status=status,
+                    data=data,
+                    completeness_score=scraper_result.completeness_score,
+                )
+            finally:
+                await scraper_agent.close()
+
         else:
-            # Placeholder for scraper agent
-            await asyncio.sleep(0.1)
+            # Unknown agent
             return AgentResult(
                 agent_name=agent_name,
-                status="success",
-                data={
-                    "song": {
-                        "title": song_name,
-                        "source": agent_name,
-                    }
-                },
-                completeness_score=0.5,
+                status="failed",
+                data={},
+                completeness_score=0.0,
+                error_message=f"Unknown agent: {agent_name}",
             )
 
     def merge_results(self, results: List[AgentResult]) -> Dict[str, Any]:
@@ -516,6 +539,9 @@ class OrchestratorAgent:
             "album": {},
             "relationships": [],
             "data_sources": [],
+            "venues": [],
+            "concerts": [],
+            "setlists": [],
         }
 
         # Filter successful and partial results
@@ -547,6 +573,21 @@ class OrchestratorAgent:
         relationship_data_list = [r for r in valid_results if r.data.get("relationships")]
         if relationship_data_list:
             merged_data["relationships"] = self._merge_relationships(relationship_data_list)
+
+        # Merge venues
+        venue_data_list = [r for r in valid_results if r.data.get("venues")]
+        if venue_data_list:
+            merged_data["venues"] = self._merge_venues(venue_data_list)
+
+        # Merge concerts
+        concert_data_list = [r for r in valid_results if r.data.get("concerts")]
+        if concert_data_list:
+            merged_data["concerts"] = self._merge_concerts(concert_data_list)
+
+        # Merge setlists
+        setlist_data_list = [r for r in valid_results if r.data.get("setlists")]
+        if setlist_data_list:
+            merged_data["setlists"] = self._merge_setlists(setlist_data_list)
 
         # Estimate audio features from tags if not already present
         song_data = merged_data.get("song", {})
@@ -708,6 +749,59 @@ class OrchestratorAgent:
             if isinstance(relationships, list):
                 all_relationships.extend(relationships)
         return all_relationships
+
+    def _merge_venues(self, venue_data_list: List[AgentResult]) -> List[Dict[str, Any]]:
+        """Merge venue data from multiple sources.
+
+        Args:
+            venue_data_list: List of agent results containing venue data
+
+        Returns:
+            List of merged venue dictionaries (deduplicated by name)
+        """
+        seen = set()
+        merged_venues = []
+        for result in venue_data_list:
+            venues = result.data.get("venues", [])
+            if isinstance(venues, list):
+                for venue in venues:
+                    name = venue.get("name", "") if isinstance(venue, dict) else ""
+                    if name and name not in seen:
+                        seen.add(name)
+                        merged_venues.append(venue)
+        return merged_venues
+
+    def _merge_concerts(self, concert_data_list: List[AgentResult]) -> List[Dict[str, Any]]:
+        """Merge concert data from multiple sources.
+
+        Args:
+            concert_data_list: List of agent results containing concert data
+
+        Returns:
+            List of merged concert dictionaries
+        """
+        all_concerts = []
+        for result in concert_data_list:
+            concerts = result.data.get("concerts", [])
+            if isinstance(concerts, list):
+                all_concerts.extend(concerts)
+        return all_concerts
+
+    def _merge_setlists(self, setlist_data_list: List[AgentResult]) -> List[Dict[str, Any]]:
+        """Merge setlist data from multiple sources.
+
+        Args:
+            setlist_data_list: List of agent results containing setlist data
+
+        Returns:
+            List of merged setlist dictionaries
+        """
+        all_setlists = []
+        for result in setlist_data_list:
+            setlists = result.data.get("setlists", [])
+            if isinstance(setlists, list):
+                all_setlists.extend(setlists)
+        return all_setlists
 
     def _get_source_quality(self, source_name: str) -> float:
         """Get quality score for a data source.

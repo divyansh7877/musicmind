@@ -55,6 +55,25 @@ class Settings(BaseSettings):
         default="https://api.overmind.com", description="Overmind Lab endpoint"
     )
 
+    # Clerk Authentication
+    clerk_secret_key: Optional[str] = Field(
+        default=None,
+        description="Clerk secret key for token verification (server-side only)",
+    )
+    clerk_publishable_key: Optional[str] = Field(
+        default=None,
+        description="Clerk publishable key (frontend + backend config)",
+    )
+    clerk_api_url: str = Field(
+        default="https://api.clerk.com",
+        description="Clerk API URL",
+    )
+    # Set to true to require Clerk auth; false falls back to custom JWT
+    clerk_auth_only: bool = Field(
+        default=False,
+        description="If true, only Clerk tokens are accepted (no custom JWT)",
+    )
+
     # Demo Mode
     demo_mode: bool = Field(
         default=False,

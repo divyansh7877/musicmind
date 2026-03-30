@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ClerkProvider } from '@clerk/react';
 import { AuthProvider } from './hooks/useAuth';
 import Layout from './components/Layout';
 import SearchPage from './pages/SearchPage';
@@ -18,23 +19,28 @@ const queryClient = new QueryClient({
   },
 });
 
+const clerkPubKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route element={<Layout />}>
-              <Route path="/" element={<SearchPage />} />
-              <Route path="/graph/:nodeId" element={<GraphPage />} />
-              <Route path="/login" element={<LoginPage />} />
-              <Route path="/register" element={<RegisterPage />} />
-              <Route path="/query" element={<QueryPage />} />
-              <Route path="/activity" element={<ActivityPage />} />
-            </Route>
-          </Routes>
-        </BrowserRouter>
-      </AuthProvider>
+      <ClerkProvider publishableKey={clerkPubKey}>
+        <AuthProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route element={<Layout />}>
+                <Route path="/" element={<SearchPage />} />
+                <Route path="/graph/:nodeId" element={<GraphPage />} />
+                <Route path="/login" element={<LoginPage />} />
+                <Route path="/register" element={<RegisterPage />} />
+                <Route path="/query" element={<QueryPage />} />
+                <Route path="/activity" element={<ActivityPage />} />
+              </Route>
+            </Routes>
+          </BrowserRouter>
+        </AuthProvider>
+      </ClerkProvider>
     </QueryClientProvider>
   );
 }
+

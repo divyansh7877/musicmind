@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
-import { login as apiLogin, register as apiRegister, clearTokens, isAuthenticated } from '../utils/api';
+import { useAuth as useClerkAuth, useUser } from '@clerk/react';
+import { clearTokens } from '../utils/api';
 import type { User } from '../types/api';
 
 const DEMO_USER: User = { id: '00000000-0000-0000-0000-000000000000', username: 'demo', email: 'demo@musicmind.local' };
@@ -24,20 +25,21 @@ function parseJwt(token: string): Record<string, unknown> | null {
   }
 }
 
-function userFromToken(): User | null {
-  const token = localStorage.getItem('access_token');
-  if (!token) return null;
-  const payload = parseJwt(token);
-  if (!payload) return null;
+function userFromClerk(user: ReturnType<typeof useUser>['user']): User | null {
+  if (!user) return null;
   return {
-    id: payload.sub as string,
-    username: payload.username as string,
-    email: '',
+    id: user.id,
+    username: user.username || user.primaryEmailAddress?.emailAddress?.split('@')[0] || user.id,
+    email: user.primaryEmailAddress?.emailAddress || '',
   };
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(userFromToken);
+  const { isSignedIn } = useClerkAuth();
+  const { user } = useUser();
+  const [userState, setUserState] = useState<User | null>(() =>
+    isSignedIn ? userFromClerk(user) : null,
+  );
   const [demoMode, setDemoMode] = useState(false);
 
   useEffect(() => {
@@ -46,36 +48,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then((cfg) => {
         if (cfg.demo_mode) {
           setDemoMode(true);
-          setUser(DEMO_USER);
+          setUserState(DEMO_USER);
         }
       })
       .catch(() => {});
   }, []);
 
   useEffect(() => {
-    if (!demoMode && isAuthenticated() && !user) {
-      setUser(userFromToken());
+    if (!demoMode) {
+      setUserState(isSignedIn ? userFromClerk(user) : null);
     }
-  }, [user, demoMode]);
+  }, [isSignedIn, user, demoMode]);
 
-  const login = useCallback(async (username: string, password: string) => {
-    await apiLogin(username, password);
-    setUser(userFromToken());
+  const login = useCallback(async (_username: string, _password: string) => {
+    // Login is handled by Clerk's <SignIn> component — no-op here
+    // Kept for backwards compat with code calling useAuth().login()
   }, []);
 
-  const register = useCallback(async (username: string, password: string, email: string) => {
-    await apiRegister(username, password, email);
-    setUser(userFromToken());
+  const register = useCallback(async (_username: string, _password: string, _email: string) => {
+    // Registration is handled by Clerk's <SignUp> component — no-op here
   }, []);
 
   const logout = useCallback(() => {
     if (demoMode) return;
+    // Clerk handles sign-out via window.Clerk.signOut() triggered by UserButton
     clearTokens();
-    setUser(null);
   }, [demoMode]);
 
   return (
-    <AuthContext.Provider value={{ user, isLoggedIn: demoMode || !!user, demoMode, login, register, logout }}>
+    <AuthContext.Provider
+      value={{ user: userState, isLoggedIn: demoMode || isSignedIn, demoMode, login, register, logout }}
+    >
       {children}
     </AuthContext.Provider>
   );
@@ -86,3 +89,4 @@ export function useAuth() {
   if (!ctx) throw new Error('useAuth must be used within AuthProvider');
   return ctx;
 }
+

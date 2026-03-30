@@ -14,6 +14,19 @@ const api = axios.create({
 });
 
 function getToken(): string | null {
+  // Try Clerk session token first
+  try {
+    if (typeof window !== 'undefined' && (window as any).Clerk?.session) {
+      // Clerk session token is read synchronously from cookie/local state
+      const session = (window as any).Clerk.session;
+      if (session && typeof session.getToken === 'function') {
+        return session.getToken() as string | null;
+      }
+    }
+  } catch {
+    // Fall through to custom JWT
+  }
+  // Fall back to custom JWT (backwards compat when Clerk not configured)
   return localStorage.getItem('access_token');
 }
 
@@ -31,8 +44,8 @@ export function clearTokens() {
   localStorage.removeItem('refresh_token');
 }
 
-api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  const token = getToken();
+api.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
+  const token = await getToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -43,8 +56,23 @@ api.interceptors.response.use(
   (res) => res,
   async (error: AxiosError) => {
     const original = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
+
     if (error.response?.status === 401 && !original._retry) {
       original._retry = true;
+
+      // Check if Clerk is configured — Clerk handles token refresh internally;
+      // if Clerk token is invalid, redirect to sign-in directly.
+      try {
+        const clerkSession = (window as any).Clerk?.session;
+        if (clerkSession) {
+          window.location.href = '/login';
+          return Promise.reject(error);
+        }
+      } catch {
+        // Clerk not available, fall through to JWT refresh
+      }
+
+      // Try custom JWT refresh (backwards compat)
       const refresh = getRefreshToken();
       if (refresh) {
         try {

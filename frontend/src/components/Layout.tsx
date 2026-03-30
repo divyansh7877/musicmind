@@ -1,5 +1,6 @@
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { UserButton } from '@clerk/react';
 
 const navLinks = [
   { to: '/', label: 'Search' },
@@ -51,12 +52,10 @@ export default function Layout() {
                 <span className="text-sm text-slate font-medium">
                   {user?.username}
                 </span>
-                <button
-                  onClick={logout}
-                  className="text-sm text-ghost hover:text-rust transition-colors cursor-pointer"
-                >
-                  Sign out
-                </button>
+                <UserButton
+                  afterSignOutUrl="/login"
+                  userProfileUrl="/profile"
+                />
               </div>
             ) : (
               <Link

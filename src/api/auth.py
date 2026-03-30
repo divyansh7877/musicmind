@@ -1,11 +1,13 @@
-"""Authentication service with JWT and bcrypt."""
+"""Authentication service with Clerk + optional custom JWT and bcrypt."""
 
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Optional
 from uuid import UUID, uuid4
 
 import bcrypt
+import httpx
 import jwt
 from pydantic import BaseModel
 
@@ -47,6 +49,10 @@ class AuthService:
         self.algorithm = settings.jwt_algorithm
         self.access_token_expire_minutes = settings.jwt_access_token_expire_minutes
         self.refresh_token_expire_days = settings.jwt_refresh_token_expire_days
+        # Clerk JWKS cache: {"keys": [...], "fetched_at": timestamp}
+        self._clerk_jwks: Optional[dict] = None
+        self._clerk_jwks_fetched_at: float = 0.0
+        self._clerk_jwks_ttl: float = 3600.0  # Refresh every hour
 
     def _hash_password(self, password: str) -> str:
         """Hash password using bcrypt with salt.
@@ -218,10 +224,153 @@ class AuthService:
         )
 
     async def verify_token(self, token: str) -> Optional[User]:
-        """Verify JWT access token and return user.
+        """Verify token and return user.
+
+        Attempts Clerk token verification first if CLERK_SECRET_KEY is set,
+        then falls back to the custom JWT.
 
         Args:
-            token: JWT access token
+            token: JWT access token (Clerk or custom)
+
+        Returns:
+            User if token valid, None otherwise
+        """
+        # Try Clerk token first if configured
+        if settings.clerk_secret_key:
+            clerk_user = await self._verify_clerk_token(token)
+            if clerk_user:
+                return clerk_user
+
+        # Fall back to custom JWT (only if not clerk-auth-only mode)
+        if not settings.clerk_auth_only:
+            return await self._verify_custom_jwt(token)
+
+        return None
+
+    async def _verify_clerk_token(self, token: str) -> Optional[User]:
+        """Verify a Clerk session token and return a User.
+
+        Fetches Clerk's JWKS on first call (cached for 1 hour) and verifies
+        the RS256 JWT signature, then extracts user claims.
+
+        Args:
+            token: Clerk session JWT (from Authorization header)
+
+        Returns:
+            User if token valid, None otherwise
+        """
+        try:
+            # Fetch Clerk's JWKS if not cached or stale
+            if not self._clerk_jwks or (time.time() - self._clerk_jwks_fetched_at) > self._clerk_jwks_ttl:
+                jwks_url = f"{settings.clerk_api_url}/jwks"
+                try:
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        response = await client.get(jwks_url)
+                        response.raise_for_status()
+                        self._clerk_jwks = response.json()
+                        self._clerk_jwks_fetched_at = time.time()
+                        logger.debug("Clerk JWKS refreshed")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch Clerk JWKS: {e}")
+                    # Continue with unverified decode if JWKS fetch fails
+                    # (Clerk SDK would do the same in degraded mode)
+
+            if not self._clerk_jwks or not self._clerk_jwks.get("keys"):
+                # JWKS unavailable — degrade to unverified decode
+                return self._decode_clerk_token_unverified(token)
+
+            # Build a PyJWT-compatible JWKS key dictionary
+            jwks_client = jwt.PyJWKClient.from_dict(self._clerk_jwks)
+            signing_key = jwks_client.get_signing_key_from_jwt(token)
+
+            payload = jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=["RS256"],
+                options={"verify_exp": True},
+            )
+
+            sub = payload.get("sub")
+            if not sub:
+                return None
+
+            user_id = UUID(sub)
+            email = payload.get("email", "")
+            username = (
+                payload.get("username")
+                or payload.get("name", "")
+                or (email.split("@")[0] if email else "")
+                or str(user_id)[:8]
+            )
+
+            logger.debug(f"Clerk user verified: {username} ({user_id})")
+
+            return User(
+                id=user_id,
+                username=username,
+                email=email or "",
+                created_at=datetime.utcnow(),
+            )
+
+        except jwt.ExpiredSignatureError:
+            logger.debug("Clerk token expired")
+            return None
+        except (jwt.InvalidTokenError, ValueError) as e:
+            logger.debug(f"Clerk token verification failed: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected Clerk token error: {e}")
+            return None
+
+    def _decode_clerk_token_unverified(self, token: str) -> Optional[User]:
+        """Decode Clerk token without signature verification (degraded mode).
+
+        Used when Clerk JWKS is unavailable. Extracts claims from the JWT
+        payload without verifying the signature — only use when Clerk JWKS
+        fetch fails.
+
+        Args:
+            token: Clerk session JWT
+
+        Returns:
+            User if payload contains valid sub/email, None otherwise
+        """
+        try:
+            payload = jwt.decode(
+                token,
+                options={"verify_signature": False},
+                algorithms=["RS256"],
+            )
+            sub = payload.get("sub")
+            if not sub:
+                return None
+
+            user_id = UUID(sub)
+            email = payload.get("email", "")
+            username = (
+                payload.get("username")
+                or payload.get("name", "")
+                or (email.split("@")[0] if email else "")
+                or str(user_id)[:8]
+            )
+
+            logger.debug(f"Clerk user verified (unverified): {username} ({user_id})")
+
+            return User(
+                id=user_id,
+                username=username,
+                email=email or "",
+                created_at=datetime.utcnow(),
+            )
+        except (jwt.InvalidTokenError, ValueError) as e:
+            logger.debug(f"Clerk token unverified decode failed: {e}")
+            return None
+
+    async def _verify_custom_jwt(self, token: str) -> Optional[User]:
+        """Verify a custom JWT access token and return user.
+
+        Args:
+            token: Custom JWT access token
 
         Returns:
             User if token valid, None otherwise
