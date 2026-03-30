@@ -294,14 +294,10 @@ class TestSpotifyAgent:
         assert result["name"] == "Test Album"
 
     @pytest.mark.asyncio
-    async def test_get_audio_features_success(self, spotify_agent, mock_audio_features):
-        """Test successful audio features fetch."""
-        with patch.object(spotify_agent, "_make_request", return_value=mock_audio_features):
-            result = await spotify_agent.get_audio_features("track123")
-
-        assert result is not None
-        assert result["tempo"] == 120.0
-        assert result["energy"] == 0.8
+    async def test_get_audio_features_deprecated(self, spotify_agent, mock_audio_features):
+        """Test audio features returns None (endpoint deprecated Feb 2026)."""
+        result = await spotify_agent.get_audio_features("track123")
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_fetch_spotify_data_complete(
@@ -313,10 +309,9 @@ class TestSpotifyAgent:
         mock_audio_features,
     ):
         """Test complete Spotify data fetch with all components."""
-        # Mock all API calls
+        # Mock all API calls (audio features endpoint is deprecated, returns None)
         with (
             patch.object(spotify_agent, "search_track", return_value=mock_track_data),
-            patch.object(spotify_agent, "get_audio_features", return_value=mock_audio_features),
             patch.object(spotify_agent, "get_artist_details", return_value=mock_artist_data),
             patch.object(spotify_agent, "get_album_details", return_value=mock_album_data),
         ):
@@ -330,10 +325,9 @@ class TestSpotifyAgent:
         assert result.song.spotify_id == "track123"
         assert result.song.duration_ms == 180000
 
-        # Verify audio features
-        assert result.song.audio_features is not None
-        assert result.song.audio_features.tempo == 120.0
-        assert result.song.audio_features.energy == 0.8
+        # Audio features are no longer available from Spotify (deprecated Feb 2026);
+        # they are estimated from Last.fm/MusicBrainz tags in the orchestrator instead
+        assert result.song.audio_features is None
 
         # Verify artists
         assert len(result.artists) == 1

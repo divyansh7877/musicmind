@@ -7,6 +7,7 @@ import GraphPage from './pages/GraphPage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import ActivityPage from './pages/ActivityPage';
+import QueryPage from './pages/QueryPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -28,6 +29,7 @@ export default function App() {
               <Route path="/graph/:nodeId" element={<GraphPage />} />
               <Route path="/login" element={<LoginPage />} />
               <Route path="/register" element={<RegisterPage />} />
+              <Route path="/query" element={<QueryPage />} />
               <Route path="/activity" element={<ActivityPage />} />
             </Route>
           </Routes>

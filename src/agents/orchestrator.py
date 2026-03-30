@@ -405,14 +405,12 @@ class OrchestratorAgent:
             AgentResult with data from the agent
         """
         if agent_name == "spotify":
-            # Import here to avoid circular dependencies
             from src.agents.spotify_agent import SpotifyAgent
 
             agent = SpotifyAgent(overmind_client=self.overmind_client)
             try:
                 spotify_result = await agent.fetch_spotify_data(song_name)
 
-                # Convert to AgentResult format
                 data = {}
                 if spotify_result.song:
                     data["song"] = spotify_result.song.model_dump()
@@ -431,8 +429,65 @@ class OrchestratorAgent:
                 )
             finally:
                 await agent.close()
+
+        elif agent_name == "lastfm":
+            from src.agents.lastfm_agent import LastFMAgent
+
+            lastfm_agent = LastFMAgent(overmind_client=self.overmind_client)
+            try:
+                lastfm_result = await lastfm_agent.fetch_lastfm_data(song_name)
+
+                data = {}
+                if lastfm_result.song:
+                    data["song"] = lastfm_result.song.model_dump()
+                if lastfm_result.artists:
+                    data["artists"] = [artist.model_dump() for artist in lastfm_result.artists]
+                if lastfm_result.similar_tracks:
+                    data["similar_tracks"] = lastfm_result.similar_tracks
+                if lastfm_result.tags:
+                    data["tags"] = lastfm_result.tags
+
+                status = "success" if lastfm_result.completeness_score > 0.0 else "failed"
+
+                return AgentResult(
+                    agent_name=agent_name,
+                    status=status,
+                    data=data,
+                    completeness_score=lastfm_result.completeness_score,
+                )
+            finally:
+                await lastfm_agent.close()
+
+        elif agent_name == "musicbrainz":
+            from src.agents.musicbrainz_agent import MusicBrainzAgent
+
+            mb_agent = MusicBrainzAgent(overmind_client=self.overmind_client)
+            try:
+                mb_result = await mb_agent.fetch_musicbrainz_data(song_name)
+
+                data = {}
+                if mb_result.song:
+                    data["song"] = mb_result.song.model_dump()
+                if mb_result.artists:
+                    data["artists"] = [artist.model_dump() for artist in mb_result.artists]
+                if mb_result.relationships:
+                    data["relationships"] = mb_result.relationships
+                if mb_result.label_info:
+                    data["label_info"] = mb_result.label_info
+
+                status = "success" if mb_result.completeness_score > 0.0 else "failed"
+
+                return AgentResult(
+                    agent_name=agent_name,
+                    status=status,
+                    data=data,
+                    completeness_score=mb_result.completeness_score,
+                )
+            finally:
+                await mb_agent.close()
+
         else:
-            # Placeholder for other agents (musicbrainz, lastfm, scraper)
+            # Placeholder for scraper agent
             await asyncio.sleep(0.1)
             return AgentResult(
                 agent_name=agent_name,
@@ -492,6 +547,28 @@ class OrchestratorAgent:
         relationship_data_list = [r for r in valid_results if r.data.get("relationships")]
         if relationship_data_list:
             merged_data["relationships"] = self._merge_relationships(relationship_data_list)
+
+        # Estimate audio features from tags if not already present
+        song_data = merged_data.get("song", {})
+        has_audio_features = song_data.get("audio_features") is not None
+        if not has_audio_features:
+            all_tags: list = []
+            # Collect tags from song data
+            song_tags = song_data.get("tags", [])
+            if isinstance(song_tags, list):
+                all_tags.extend(song_tags)
+            # Collect tags from Last.fm/MusicBrainz agent results
+            for r in valid_results:
+                agent_tags = r.data.get("tags", [])
+                if isinstance(agent_tags, list):
+                    all_tags.extend(agent_tags)
+
+            if all_tags:
+                from src.utils.audio_features_estimator import estimate_audio_features
+
+                estimated = estimate_audio_features(all_tags)
+                if estimated:
+                    merged_data["song"]["audio_features"] = estimated.model_dump()
 
         return merged_data
 
@@ -661,9 +738,6 @@ class OrchestratorAgent:
         Returns:
             List of persisted graph node UUIDs
         """
-        if not self.db_client:
-            return [uuid4()]
-
         import hashlib
 
         def _deterministic_uuid(namespace: str, name: str) -> UUID:
@@ -676,11 +750,21 @@ class OrchestratorAgent:
         album_data = merged_data.get("album", {})
         data_sources = merged_data.get("data_sources", [])
 
+        # Compute deterministic IDs first (independent of DB availability)
+        song_title = song_data.get("title") or song_data.get("name", "")
+        if song_title:
+            song_id = _deterministic_uuid("song", song_title)
+            graph_node_ids.append(song_id)
+        else:
+            song_id = uuid4()
+            graph_node_ids.append(song_id)
+
+        if not self.db_client:
+            return graph_node_ids
+
         try:
             # --- Song node ---
-            song_title = song_data.get("title") or song_data.get("name", "")
             if song_title:
-                song_id = _deterministic_uuid("song", song_title)
                 song_props = {
                     "id": str(song_id),
                     "title": song_title,
@@ -693,7 +777,6 @@ class OrchestratorAgent:
                     if k not in song_props and v is not None:
                         song_props[k] = v
                 self.db_client.upsert_node("Song", song_props)
-                graph_node_ids.append(song_id)
 
                 # --- Artist nodes + PERFORMED_IN edges ---
                 if isinstance(artists_data, list):
@@ -713,7 +796,6 @@ class OrchestratorAgent:
                                 if k not in artist_props and v is not None:
                                     artist_props[k] = v
                         self.db_client.upsert_node("Artist", artist_props)
-                        graph_node_ids.append(artist_id)
 
                         # Edge: Artist --PERFORMED_IN--> Song
                         edge_id = _deterministic_uuid("performed_in", f"{artist_name}:{song_title}")
@@ -746,7 +828,6 @@ class OrchestratorAgent:
                             if k not in album_props and v is not None:
                                 album_props[k] = v
                         self.db_client.upsert_node("Album", album_props)
-                        graph_node_ids.append(album_id)
 
                         # Edge: Song --PART_OF_ALBUM--> Album
                         edge_id = _deterministic_uuid("part_of_album", f"{song_title}:{album_name}")
@@ -766,8 +847,6 @@ class OrchestratorAgent:
 
         except Exception as e:
             logger.warning(f"Graph persistence failed (non-fatal): {e}")
-            if not graph_node_ids:
-                graph_node_ids = [uuid4()]
 
         return graph_node_ids
 

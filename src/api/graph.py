@@ -8,7 +8,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from src.database.aerospike_client import AerospikeClient
+from src.database.aerospike_client import AerospikeClient, _BIN_NAME_REVERSE
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,11 @@ class GraphService:
     """Service for graph traversal and visualization."""
 
     MAX_NODES = 1000
+
+    @staticmethod
+    def _expand(record: Dict[str, Any]) -> Dict[str, Any]:
+        """Restore shortened Aerospike bin names to original field names."""
+        return {_BIN_NAME_REVERSE.get(k, k): v for k, v in record.items()}
 
     def __init__(self, db_client: AerospikeClient):
         """Initialize graph service.
@@ -195,8 +200,13 @@ class GraphService:
         """
         node_id_str = str(node_id)
         node_types = [
-            "Song", "Artist", "Album", "RecordLabel",
-            "Instrument", "Venue", "Concert",
+            "Song",
+            "Artist",
+            "Album",
+            "RecordLabel",
+            "Instrument",
+            "Venue",
+            "Concert",
         ]
 
         try:
@@ -205,8 +215,9 @@ class GraphService:
                 try:
                     _, _, record = self.db_client._client.get(key)
                     if record:
-                        record["type"] = record.get("node_type", node_type)
-                        return record
+                        expanded = self._expand(record)
+                        expanded["type"] = expanded.get("node_type", node_type)
+                        return expanded
                 except Exception:
                     continue
             return None
@@ -226,7 +237,14 @@ class GraphService:
         """
         node_id_str = str(node_id)
         edges: List[Dict[str, Any]] = []
-        edge_types = ["PERFORMED_IN", "PART_OF_ALBUM", "SIGNED_WITH", "SIMILAR_TO", "PLAYED_INSTRUMENT", "PERFORMED_AT"]
+        edge_types = [
+            "PERFORMED_IN",
+            "PART_OF_ALBUM",
+            "SIGNED_WITH",
+            "SIMILAR_TO",
+            "PLAYED_INSTRUMENT",
+            "PERFORMED_AT",
+        ]
 
         for edge_type in edge_types:
             try:
@@ -239,26 +257,120 @@ class GraphService:
                         record.get("from_node_id") == node_id_str
                         or record.get("to_node_id") == node_id_str
                     ):
-                        out.append(record)
+                        out.append(self._expand(record))
 
                 scan.foreach(_collect)
 
                 for rec in results:
                     from_id = rec.get("from_node_id", "")
                     to_id = rec.get("to_node_id", "")
-                    edges.append({
-                        "from_node_id": from_id,
-                        "to_node_id": to_id,
-                        "edge_type": rec.get("edge_type", edge_type),
-                        "properties": {
-                            k: v for k, v in rec.items()
-                            if k not in ("from_node_id", "to_node_id", "edge_type", "id")
-                        },
-                    })
+                    edges.append(
+                        {
+                            "from_node_id": from_id,
+                            "to_node_id": to_id,
+                            "edge_type": rec.get("edge_type", edge_type),
+                            "properties": {
+                                k: v
+                                for k, v in rec.items()
+                                if k not in ("from_node_id", "to_node_id", "edge_type", "id")
+                            },
+                        }
+                    )
             except Exception as e:
                 logger.debug(f"Edge scan for {edge_type} failed: {e}")
 
         return edges
+
+    async def get_full_graph(self) -> GraphTraversalResponse:
+        """Scan all node and edge types to return the complete graph."""
+        nodes: List[GraphNode] = []
+        edges: List[GraphEdge] = []
+        node_ids: Set[str] = set()
+
+        node_types = [
+            "Song",
+            "Artist",
+            "Album",
+            "RecordLabel",
+            "Instrument",
+            "Venue",
+            "Concert",
+        ]
+        edge_types = [
+            "PERFORMED_IN",
+            "PART_OF_ALBUM",
+            "SIGNED_WITH",
+            "SIMILAR_TO",
+            "PLAYED_INSTRUMENT",
+            "PERFORMED_AT",
+        ]
+
+        for node_type in node_types:
+            try:
+                scan = self.db_client._client.scan(self.db_client.namespace, node_type)
+                results: List[Dict[str, Any]] = []
+
+                def _collect(input_tuple: Any, out: List = results) -> None:
+                    _, _, record = input_tuple
+                    if record:
+                        out.append(self._expand(record))
+
+                scan.foreach(_collect)
+
+                for record in results:
+                    nid = record.get("id", "")
+                    if nid and nid not in node_ids:
+                        node_ids.add(nid)
+                        record["type"] = record.get("node_type", node_type)
+                        nodes.append(
+                            GraphNode(
+                                id=nid,
+                                type=record["type"],
+                                data=self._sanitize_node_data(record),
+                            )
+                        )
+            except Exception as e:
+                logger.debug(f"Full scan for {node_type} failed: {e}")
+
+        for edge_type in edge_types:
+            try:
+                scan = self.db_client._client.scan(self.db_client.namespace, edge_type)
+                results = []
+
+                def _collect_edge(input_tuple: Any, out: List = results) -> None:
+                    _, _, record = input_tuple
+                    if record:
+                        out.append(self._expand(record))
+
+                scan.foreach(_collect_edge)
+
+                for rec in results:
+                    from_id = rec.get("from_node_id", "")
+                    to_id = rec.get("to_node_id", "")
+                    if from_id in node_ids and to_id in node_ids:
+                        edges.append(
+                            GraphEdge(
+                                from_node_id=from_id,
+                                to_node_id=to_id,
+                                edge_type=rec.get("edge_type", edge_type),
+                                properties={
+                                    k: v
+                                    for k, v in rec.items()
+                                    if k not in ("from_node_id", "to_node_id", "edge_type", "id")
+                                },
+                            )
+                        )
+            except Exception as e:
+                logger.debug(f"Full edge scan for {edge_type} failed: {e}")
+
+        return GraphTraversalResponse(
+            nodes=nodes,
+            edges=edges,
+            total_nodes=len(nodes),
+            total_edges=len(edges),
+            depth_reached=0,
+            truncated=len(nodes) >= self.MAX_NODES,
+        )
 
     def _sanitize_node_data(self, node: Dict[str, Any]) -> Dict[str, Any]:
         """Sanitize node data for frontend.

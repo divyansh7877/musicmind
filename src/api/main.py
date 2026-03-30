@@ -1,5 +1,6 @@
 """FastAPI application for MusicMind web frontend."""
 
+import hashlib
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -27,12 +28,105 @@ from src.self_improvement.feedback_processor import FeedbackProcessor, UserFeedb
 from src.self_improvement.quality_tracker import QualityTracker
 from src.self_improvement.enrichment_scheduler import EnrichmentScheduler
 from src.tracing.overmind_client import OvermindClient
+from src.agents.llm_query_agent import LLMQueryAgent
 from src.api.auth import AuthService, User, TokenResponse
 from src.api.graph import GraphService, GraphTraversalRequest, GraphTraversalResponse
 from src.api.rate_limiter import RateLimiter
 from src.api.security import InputValidator
 
 logger = logging.getLogger(__name__)
+
+
+def _deterministic_id(namespace: str, name: str) -> str:
+    """Generate a deterministic ID from namespace and name (matches orchestrator format)."""
+    h = hashlib.sha256(f"{namespace}:{name.lower().strip()}".encode()).hexdigest()
+    return str(UUID(h[:32]))
+
+
+class GraphAccumulator:
+    """Accumulates graph data across multiple enrichments for cumulative visualization."""
+
+    def __init__(self) -> None:
+        self._nodes: Dict[str, Dict[str, Any]] = {}
+        self._edges: Dict[str, Dict[str, Any]] = {}
+
+    def add_enrichment(
+        self,
+        merged_data: Dict[str, Any],
+        completeness_score: float = 0.0,
+    ) -> None:
+        """Add an enrichment result to the accumulated graph."""
+        song = merged_data.get("song", {})
+        artists = merged_data.get("artists", [])
+        album = merged_data.get("album", {})
+
+        song_label = song.get("title") or song.get("name", "")
+        if not song_label:
+            return
+
+        song_id = _deterministic_id("song", song_label)
+        self._nodes[song_id] = {
+            "id": song_id,
+            "type": "Song",
+            "data": {**song, "label": song_label, "completeness_score": completeness_score},
+        }
+
+        for artist in artists if isinstance(artists, list) else []:
+            artist_name = artist.get("name", "") if isinstance(artist, dict) else ""
+            if not artist_name:
+                continue
+            aid = _deterministic_id("artist", artist_name)
+            # Merge: keep existing data but update with new
+            existing = self._nodes.get(aid, {}).get("data", {})
+            existing.update(artist if isinstance(artist, dict) else {})
+            existing["label"] = artist_name
+            self._nodes[aid] = {"id": aid, "type": "Artist", "data": existing}
+
+            edge_key = f"{aid}->{song_id}:PERFORMED_IN"
+            self._edges[edge_key] = {
+                "from_node_id": aid,
+                "to_node_id": song_id,
+                "edge_type": "PERFORMED_IN",
+                "properties": {},
+            }
+
+        if album and isinstance(album, dict):
+            album_name = album.get("name") or album.get("title", "")
+            if album_name:
+                alid = _deterministic_id("album", album_name)
+                existing = self._nodes.get(alid, {}).get("data", {})
+                existing.update(album)
+                existing["label"] = album_name
+                self._nodes[alid] = {"id": alid, "type": "Album", "data": existing}
+
+                edge_key = f"{song_id}->{alid}:PART_OF_ALBUM"
+                self._edges[edge_key] = {
+                    "from_node_id": song_id,
+                    "to_node_id": alid,
+                    "edge_type": "PART_OF_ALBUM",
+                    "properties": {},
+                }
+
+    def get_full_graph(self) -> "GraphTraversalResponse":
+        """Return the full accumulated graph."""
+        from src.api.graph import GraphNode, GraphEdge
+
+        nodes = [GraphNode(**n) for n in self._nodes.values()]
+        edges = [GraphEdge(**e) for e in self._edges.values()]
+
+        return GraphTraversalResponse(
+            nodes=nodes,
+            edges=edges,
+            total_nodes=len(nodes),
+            total_edges=len(edges),
+            depth_reached=0,
+            truncated=False,
+        )
+
+    @property
+    def is_empty(self) -> bool:
+        return len(self._nodes) == 0
+
 
 # Initialize clients
 redis_client = RedisClient()
@@ -42,13 +136,15 @@ orchestrator = None
 feedback_processor = None
 auth_service = None
 graph_service = None
+graph_accumulator = GraphAccumulator()
 rate_limiter = None
+llm_query_agent = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle manager for FastAPI application."""
-    global db_client, overmind_client, orchestrator, feedback_processor, auth_service, graph_service, rate_limiter
+    global db_client, overmind_client, orchestrator, feedback_processor, auth_service, graph_service, rate_limiter, llm_query_agent
 
     # Initialize clients
     try:
@@ -104,6 +200,14 @@ async def lifespan(app: FastAPI):
     )
     logger.info("Rate limiter initialized")
 
+    # Initialize LLM query agent
+    if settings.llm_api_key:
+        try:
+            llm_query_agent = LLMQueryAgent(db_client=db_client)
+            logger.info("LLM query agent initialized")
+        except Exception as e:
+            logger.warning(f"Failed to initialize LLM query agent: {e}")
+
     yield
 
     # Cleanup
@@ -119,9 +223,7 @@ app = FastAPI(
 
 # Configure CORS
 _cors_origins = (
-    ["*"]
-    if settings.cors_origins == "*"
-    else [o.strip() for o in settings.cors_origins.split(",")]
+    ["*"] if settings.cors_origins == "*" else [o.strip() for o in settings.cors_origins.split(",")]
 )
 app.add_middleware(
     CORSMiddleware,
@@ -356,6 +458,13 @@ async def search_song(
     try:
         result = await orchestrator.enrich_song(request.song_name)
 
+        # Accumulate graph data for cumulative visualization
+        if result.merged_data:
+            graph_accumulator.add_enrichment(
+                result.merged_data,
+                result.completeness_score,
+            )
+
         return SearchResponse(
             status=result.status,
             request_id=str(result.request_id),
@@ -404,6 +513,29 @@ async def traverse_graph(
     raise HTTPException(status_code=404, detail="Node not found and no search data provided")
 
 
+@app.get("/api/graph/full", response_model=GraphTraversalResponse)
+async def get_full_graph(
+    user: User = Depends(get_current_user),
+):
+    """Get the full cumulative graph of all enriched entities."""
+    # Try Aerospike full scan first
+    if graph_service:
+        try:
+            result = await graph_service.get_full_graph()
+            if result.total_nodes > 0:
+                return result
+        except Exception as e:
+            logger.debug(f"Aerospike full graph scan failed: {e}")
+
+    # Fall back to in-memory accumulator
+    if not graph_accumulator.is_empty:
+        return graph_accumulator.get_full_graph()
+
+    raise HTTPException(
+        status_code=404, detail="No graph data available yet. Search for a song first."
+    )
+
+
 def _build_graph_from_search_result(
     root_id: str, merged_data: Dict[str, Any]
 ) -> GraphTraversalResponse:
@@ -417,23 +549,29 @@ def _build_graph_from_search_result(
     artists = merged_data.get("artists", [])
     album = merged_data.get("album", {})
 
-    # Song node (root)
+    # Song node (root) - use deterministic ID
     song_label = song.get("title") or song.get("name", "Unknown Song")
-    nodes.append(GraphNode(id=root_id, type="Song", data={**song, "label": song_label}))
+    song_id = _deterministic_id("song", song_label)
+    nodes.append(GraphNode(id=song_id, type="Song", data={**song, "label": song_label}))
 
     # Artist nodes
-    for i, artist in enumerate(artists if isinstance(artists, list) else []):
-        artist_name = artist.get("name", f"Artist {i+1}")
-        aid = f"artist-{i}-{artist_name.lower().replace(' ', '-')}"
+    for artist in artists if isinstance(artists, list) else []:
+        artist_name = artist.get("name", "")
+        if not artist_name:
+            continue
+        aid = _deterministic_id("artist", artist_name)
         nodes.append(GraphNode(id=aid, type="Artist", data={**artist, "label": artist_name}))
-        edges.append(GraphEdge(from_node_id=aid, to_node_id=root_id, edge_type="PERFORMED_IN"))
+        edges.append(GraphEdge(from_node_id=aid, to_node_id=song_id, edge_type="PERFORMED_IN"))
 
     # Album node
     if album:
-        album_name = album.get("name") or album.get("title", "Unknown Album")
-        alid = f"album-{album_name.lower().replace(' ', '-')}"
-        nodes.append(GraphNode(id=alid, type="Album", data={**album, "label": album_name}))
-        edges.append(GraphEdge(from_node_id=root_id, to_node_id=alid, edge_type="PART_OF_ALBUM"))
+        album_name = album.get("name") or album.get("title", "")
+        if album_name:
+            alid = _deterministic_id("album", album_name)
+            nodes.append(GraphNode(id=alid, type="Album", data={**album, "label": album_name}))
+            edges.append(
+                GraphEdge(from_node_id=song_id, to_node_id=alid, edge_type="PART_OF_ALBUM")
+            )
 
     return GraphTraversalResponse(
         nodes=nodes,
@@ -508,6 +646,43 @@ async def get_activity_feed(
         )
     except Exception as e:
         logger.error(f"Activity feed failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Natural language query endpoint
+class NLQueryRequest(BaseModel):
+    """Request model for natural language graph query."""
+
+    question: str = Field(
+        ..., min_length=1, max_length=500, description="Natural language question"
+    )
+
+
+class NLQueryResponse(BaseModel):
+    """Response model for natural language graph query."""
+
+    answer: str
+    data: List[Any]
+
+
+@app.post("/api/query", response_model=NLQueryResponse)
+async def natural_language_query(
+    request: NLQueryRequest,
+    user: User = Depends(get_current_user),
+    _rate_limit: None = Depends(check_rate_limit),
+):
+    """Query the music knowledge graph using natural language."""
+    if not llm_query_agent:
+        raise HTTPException(
+            status_code=503,
+            detail="LLM query service not available. Set LLM_API_KEY in your environment.",
+        )
+
+    try:
+        result = await llm_query_agent.query(request.question)
+        return NLQueryResponse(answer=result["answer"], data=result["data"])
+    except Exception as e:
+        logger.error(f"LLM query failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

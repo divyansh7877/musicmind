@@ -462,6 +462,10 @@ class EnrichmentScheduler:
         Returns:
             Node type string or None if cannot determine
         """
+        # Check explicit node_type first (written by orchestrator)
+        if "node_type" in node_data:
+            return node_data["node_type"]
+
         # Check for type-specific fields
         if "duration_ms" in node_data or "isrc" in node_data:
             return "Song"

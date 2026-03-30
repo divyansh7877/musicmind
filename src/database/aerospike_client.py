@@ -18,6 +18,17 @@ from src.errors.handlers import log_error_to_overmind
 
 logger = logging.getLogger(__name__)
 
+# Aerospike CE limits bin names to 15 characters.
+# Map long model field names to short bin names for storage.
+_BIN_NAME_MAP: Dict[str, str] = {
+    "completeness_score": "complete_score",
+    "similarity_score": "similar_score",
+    "performance_order": "perform_order",
+    "duration_minutes": "duration_mins",
+    "ticket_price_range": "ticket_price",
+}
+_BIN_NAME_REVERSE: Dict[str, str] = {v: k for k, v in _BIN_NAME_MAP.items()}
+
 
 class AerospikeClient:
     """Wrapper for Aerospike Graph database operations with connection pooling."""
@@ -324,11 +335,12 @@ class AerospikeClient:
                     # Fetch the target node
                     target_node = self._get_node_by_id(UUID(to_node_id))
                     if target_node:
+                        expanded = self._expand_bin_names(record)
                         neighbors.append(
                             {
-                                "edge_id": record.get("id"),
-                                "edge_type": record.get("edge_type"),
-                                "edge_properties": record,
+                                "edge_id": expanded.get("id"),
+                                "edge_type": expanded.get("edge_type"),
+                                "edge_properties": expanded,
                                 "node": target_node,
                             }
                         )
@@ -355,13 +367,14 @@ class AerospikeClient:
         """
         self._ensure_connected()
 
+        bin_key = self._shorten_bin_name(property_key)
         matching_nodes = []
         scan = self._client.scan(self.namespace, node_type)
 
         def callback(input_tuple):
             key, metadata, record = input_tuple
-            if record.get(property_key) == property_value:
-                matching_nodes.append(record)
+            if record.get(bin_key) == property_value:
+                matching_nodes.append(self._expand_bin_names(record))
 
         scan.foreach(callback)
 
@@ -411,11 +424,27 @@ class AerospikeClient:
             try:
                 key, metadata, record = self._client.get(key)
                 if record:
-                    return record
+                    return self._expand_bin_names(record)
             except Exception:
                 continue
 
         return None
+
+    @staticmethod
+    def _shorten_bin_name(name: str) -> str:
+        """Shorten a field name to fit Aerospike's 15-char bin name limit."""
+        short = _BIN_NAME_MAP.get(name, name)
+        if len(short) > 15:
+            short = short[:15]
+        return short
+
+    @staticmethod
+    def _expand_bin_names(record: Dict[str, Any]) -> Dict[str, Any]:
+        """Restore shortened bin names back to their original field names.
+
+        Handles both explicitly mapped names and auto-truncated names.
+        """
+        return {_BIN_NAME_REVERSE.get(k, k): v for k, v in record.items()}
 
     def _prepare_bins(self, properties: Dict[str, Any]) -> Dict[str, Any]:
         """Prepare properties for Aerospike storage.
@@ -424,22 +453,23 @@ class AerospikeClient:
             properties: Raw properties dictionary
 
         Returns:
-            Prepared bins dictionary
+            Prepared bins dictionary with names capped at 15 characters
         """
         bins = {}
         for key, value in properties.items():
+            bin_key = self._shorten_bin_name(key)
             # Convert UUIDs to strings
             if isinstance(value, UUID):
-                bins[key] = str(value)
+                bins[bin_key] = str(value)
             # Convert datetime to ISO format string
             elif hasattr(value, "isoformat"):
-                bins[key] = value.isoformat()
+                bins[bin_key] = value.isoformat()
             # Convert nested models to dict
             elif isinstance(value, BaseModel):
-                bins[key] = value.model_dump(mode="json")
+                bins[bin_key] = value.model_dump(mode="json")
             # Keep other types as-is
             else:
-                bins[key] = value
+                bins[bin_key] = value
 
         return bins
 

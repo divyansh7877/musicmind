@@ -5,6 +5,7 @@ import type {
   TokenResponse,
   ActivityResponse,
   FeedbackRequest,
+  NLQueryResponse,
 } from '../types/api';
 
 const api = axios.create({
@@ -85,6 +86,11 @@ export async function traverseGraph(
   return data;
 }
 
+export async function getFullGraph(): Promise<GraphTraversalResponse> {
+  const { data } = await api.get<GraphTraversalResponse>('/graph/full');
+  return data;
+}
+
 export async function submitFeedback(feedback: FeedbackRequest): Promise<void> {
   await api.post('/feedback', feedback);
 }
@@ -115,6 +121,11 @@ export async function register(
     { params: { username, password, email } },
   );
   setTokens(data.access_token, data.refresh_token);
+  return data;
+}
+
+export async function queryGraph(question: string): Promise<NLQueryResponse> {
+  const { data } = await api.post<NLQueryResponse>('/query', { question });
   return data;
 }
 

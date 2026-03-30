@@ -50,9 +50,7 @@ class Settings(BaseSettings):
     )
 
     # Overmind Lab Configuration
-    overmind_api_key: Optional[str] = Field(
-        default=None, description="Overmind Lab API key"
-    )
+    overmind_api_key: Optional[str] = Field(default=None, description="Overmind Lab API key")
     overmind_endpoint: str = Field(
         default="https://api.overmind.com", description="Overmind Lab endpoint"
     )
@@ -75,14 +73,23 @@ class Settings(BaseSettings):
     )
 
     # Cache Configuration
-    cache_ttl_seconds: int = Field(
-        default=3600, description="Cache time-to-live in seconds"
+    cache_ttl_seconds: int = Field(default=3600, description="Cache time-to-live in seconds")
+
+    # LLM Configuration (MiniMax via OpenAI-compatible API)
+    llm_api_key: Optional[str] = Field(
+        default=None, description="LLM API key (e.g. MiniMax API key)"
+    )
+    llm_base_url: str = Field(
+        default="https://api.minimax.io/v1",
+        description="OpenAI-compatible base URL for LLM provider",
+    )
+    llm_model: str = Field(
+        default="MiniMax-M2.5",
+        description="LLM model name",
     )
 
     # Agent Timeouts
-    agent_timeout_ms: int = Field(
-        default=30000, description="Agent timeout in milliseconds"
-    )
+    agent_timeout_ms: int = Field(default=30000, description="Agent timeout in milliseconds")
 
     # Self-Improvement Configuration
     completeness_threshold: float = Field(

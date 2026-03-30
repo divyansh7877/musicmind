@@ -61,3 +61,8 @@ export interface User {
   username: string;
   email: string;
 }
+
+export interface NLQueryResponse {
+  answer: string;
+  data: unknown[];
+}

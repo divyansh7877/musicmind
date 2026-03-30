@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useParams, useLocation } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { traverseGraph, submitFeedback } from '../utils/api';
+import { getFullGraph, traverseGraph, submitFeedback } from '../utils/api';
 import GraphVisualization from '../components/GraphVisualization';
 import NodeDetailPanel from '../components/NodeDetailPanel';
 import ShareButton from '../components/ShareButton';
@@ -15,12 +15,24 @@ export default function GraphPage() {
   const [depth, setDepth] = useState(2);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
 
-  const graphQuery = useQuery({
+  // Fetch the full cumulative graph (all enriched songs)
+  const fullGraphQuery = useQuery({
+    queryKey: ['graph', 'full'],
+    queryFn: getFullGraph,
+    retry: 1,
+    staleTime: 0,
+    refetchOnMount: 'always',
+  });
+
+  // Fall back to single-node traversal if full graph is unavailable
+  const singleGraphQuery = useQuery({
     queryKey: ['graph', nodeId, depth],
     queryFn: () => traverseGraph(nodeId!, depth, searchResult?.merged_data),
-    enabled: !!nodeId,
+    enabled: !!nodeId && fullGraphQuery.isError,
     retry: 2,
   });
+
+  const graphQuery = fullGraphQuery.isError ? singleGraphQuery : fullGraphQuery;
 
   const feedbackMutation = useMutation({
     mutationFn: submitFeedback,
@@ -135,7 +147,7 @@ export default function GraphPage() {
             nodes={graphQuery.data.nodes}
             edges={graphQuery.data.edges}
             onNodeClick={handleNodeClick}
-            selectedNodeId={selectedNode?.id}
+            selectedNodeId={selectedNode?.id || nodeId}
           />
         )}
 

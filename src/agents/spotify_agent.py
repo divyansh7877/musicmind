@@ -300,17 +300,22 @@ class SpotifyAgent:
     async def get_audio_features(self, track_id: str) -> Optional[Dict[str, Any]]:
         """Get audio features for a track.
 
+        NOTE: The Spotify audio-features endpoint was deprecated in the
+        February 2026 API changes and returns 403 for Development Mode apps.
+        Audio features are now estimated from Last.fm/MusicBrainz tags instead.
+        This method is kept for backward compatibility but always returns None.
+
         Args:
             track_id: Spotify track ID
 
         Returns:
-            Audio features data or None if not found
+            None (endpoint deprecated)
         """
-        try:
-            return await self._make_request("GET", f"audio-features/{track_id}")
-        except Exception as e:
-            logger.error(f"Failed to get audio features for {track_id}: {e}", exc_info=True)
-            return None
+        logger.info(
+            f"Skipping audio-features for {track_id}: "
+            "endpoint deprecated since Feb 2026, using tag-based estimation instead"
+        )
+        return None
 
     async def fetch_spotify_data(self, song_name: str) -> SpotifyResult:
         """Main entry point for fetching Spotify data.
