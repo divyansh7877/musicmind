@@ -19,7 +19,7 @@ const queryClient = new QueryClient({
   },
 });
 
-const clerkPubKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
+const clerkPubKey = (import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string) || '';
 
 export default function App() {
   return (
@@ -30,6 +30,7 @@ export default function App() {
             <Routes>
               <Route element={<Layout />}>
                 <Route path="/" element={<SearchPage />} />
+                <Route path="/graph" element={<GraphPage />} />
                 <Route path="/graph/:nodeId" element={<GraphPage />} />
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/register" element={<RegisterPage />} />

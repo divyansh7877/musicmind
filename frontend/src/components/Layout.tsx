@@ -4,12 +4,13 @@ import { UserButton } from '@clerk/react';
 
 const navLinks = [
   { to: '/', label: 'Search' },
+  { to: '/graph', label: 'Graph' },
   { to: '/query', label: 'Ask' },
   { to: '/activity', label: 'Activity' },
 ];
 
 export default function Layout() {
-  const { isLoggedIn, user, logout } = useAuth();
+  const { isLoggedIn, user } = useAuth();
   const location = useLocation();
 
   return (
@@ -52,10 +53,7 @@ export default function Layout() {
                 <span className="text-sm text-slate font-medium">
                   {user?.username}
                 </span>
-                <UserButton
-                  afterSignOutUrl="/login"
-                  userProfileUrl="/profile"
-                />
+                <UserButton />
               </div>
             ) : (
               <Link

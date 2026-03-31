@@ -158,21 +158,30 @@ class OrchestratorAgent:
                 )
 
             # Step 3: Dispatch agents in parallel
-            logger.info(f"Cache miss for song: '{song_name}', dispatching agents")
+            logger.info(f"[AGENTS] Cache miss for song: '{song_name}', dispatching agents")
             results = await self.dispatch_agents(song_name, trace)
+            
+            # Log individual agent results
+            for r in results:
+                logger.info(
+                    f"[AGENTS] Agent '{r.agent_name}' completed: status={r.status}, "
+                    f"completeness={r.completeness_score:.2f}, response_time={r.response_time_ms}ms"
+                )
 
             # Step 4: Analyze data quality and update rankings
             quality_metrics = self.quality_tracker.analyze_data_quality(results)
             self.quality_tracker.update_source_rankings(quality_metrics)
 
             # Step 5: Merge results with conflict resolution (using updated rankings)
+            logger.info(f"[MERGE] Starting merge for song: '{song_name}'")
             merged_data = self.merge_results(results)
+            logger.info(f"[MERGE] Merge complete: {len(merged_data)} entities merged")
 
             # Step 5.5: Validate merged data before persistence
             merged_data, invalid_fields = DataValidator.validate_merged_data(merged_data)
             if invalid_fields:
                 logger.info(
-                    f"Validation stripped {len(invalid_fields)} invalid fields from merged data"
+                    f"[VALIDATION] Stripped {len(invalid_fields)} invalid fields from merged data"
                 )
                 if self.overmind_client:
                     self.overmind_client.log_event(
@@ -186,9 +195,12 @@ class OrchestratorAgent:
 
             # Step 6: Calculate overall completeness
             completeness_score = self._calculate_overall_completeness(merged_data)
+            logger.info(f"[SCORE] Completeness score for '{song_name}': {completeness_score:.2f}")
 
             # Step 7: Persist to graph database
+            logger.info(f"[GRAPH] Persisting '{song_name}' to graph database")
             graph_node_ids = self._persist_to_graph(merged_data, completeness_score)
+            logger.info(f"[GRAPH] Persisted {len(graph_node_ids)} nodes for '{song_name}'")
 
             enrichment_result = EnrichmentResult(
                 status="success" if any(r.status == "success" for r in results) else "partial",
@@ -273,6 +285,7 @@ class OrchestratorAgent:
         """
         # Define agent tasks
         agent_names = ["spotify", "musicbrainz", "lastfm", "scraper"]
+        logger.info(f"[AGENTS] Dispatching {len(agent_names)} agents: {agent_names}")
 
         # Create tasks for parallel execution
         tasks = []
@@ -405,11 +418,14 @@ class OrchestratorAgent:
             AgentResult with data from the agent
         """
         if agent_name == "spotify":
+            logger.info(f"[SPOTIFY] Fetching data for: '{song_name}'")
             from src.agents.spotify_agent import SpotifyAgent
 
             agent = SpotifyAgent(overmind_client=self.overmind_client)
             try:
                 spotify_result = await agent.fetch_spotify_data(song_name)
+                
+                logger.info(f"[SPOTIFY] Result for '{song_name}': score={spotify_result.completeness_score:.2f}")
 
                 data = {}
                 if spotify_result.song:
@@ -431,11 +447,14 @@ class OrchestratorAgent:
                 await agent.close()
 
         elif agent_name == "lastfm":
+            logger.info(f"[LASTFM] Fetching data for: '{song_name}'")
             from src.agents.lastfm_agent import LastFMAgent
 
             lastfm_agent = LastFMAgent(overmind_client=self.overmind_client)
             try:
                 lastfm_result = await lastfm_agent.fetch_lastfm_data(song_name)
+                
+                logger.info(f"[LASTFM] Result for '{song_name}': score={lastfm_result.completeness_score:.2f}")
 
                 data = {}
                 if lastfm_result.song:
@@ -459,11 +478,14 @@ class OrchestratorAgent:
                 await lastfm_agent.close()
 
         elif agent_name == "musicbrainz":
+            logger.info(f"[MUSICBRAINZ] Fetching data for: '{song_name}'")
             from src.agents.musicbrainz_agent import MusicBrainzAgent
 
             mb_agent = MusicBrainzAgent(overmind_client=self.overmind_client)
             try:
                 mb_result = await mb_agent.fetch_musicbrainz_data(song_name)
+                
+                logger.info(f"[MUSICBRAINZ] Result for '{song_name}': score={mb_result.completeness_score:.2f}")
 
                 data = {}
                 if mb_result.song:
@@ -487,6 +509,7 @@ class OrchestratorAgent:
                 await mb_agent.close()
 
         elif agent_name == "scraper":
+            logger.info(f"[SCRAPER] Fetching data for: '{song_name}'")
             from src.agents.scraper_agent import WebScraperAgent
 
             scraper_agent = WebScraperAgent(overmind_client=self.overmind_client)

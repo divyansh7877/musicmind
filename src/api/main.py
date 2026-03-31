@@ -452,18 +452,33 @@ async def search_song(
     _rate_limit: None = Depends(check_rate_limit),
 ):
     """Search and enrich song data."""
+    import time
+    start_time = time.time()
+    
+    logger.info(f"[SEARCH] User '{user.username}' searching for song: '{request.song_name}'")
+
     if not orchestrator:
         raise ServiceUnavailableError("orchestrator")
 
     try:
+        logger.info(f"[SEARCH] Dispatching enrichment for: '{request.song_name}'")
         result = await orchestrator.enrich_song(request.song_name)
+        
+        elapsed_ms = int((time.time() - start_time) * 1000)
+        logger.info(
+            f"[SEARCH] Enrichment complete for '{request.song_name}': "
+            f"status={result.status}, completeness={result.completeness_score:.2f}, "
+            f"nodes={len(result.graph_node_ids)}, elapsed={elapsed_ms}ms"
+        )
 
         # Accumulate graph data for cumulative visualization
         if result.merged_data:
+            logger.info(f"[GRAPH] Accumulating graph data: {len(result.graph_node_ids)} nodes")
             graph_accumulator.add_enrichment(
                 result.merged_data,
                 result.completeness_score,
             )
+            logger.info(f"[GRAPH] Graph accumulated: {len(graph_accumulator._nodes)} total nodes, {len(graph_accumulator._edges)} total edges")
 
         return SearchResponse(
             status=result.status,
@@ -476,7 +491,8 @@ async def search_song(
     except MusicMindError:
         raise
     except Exception as e:
-        logger.error(f"Search failed: {e}", exc_info=True)
+        elapsed_ms = int((time.time() - start_time) * 1000)
+        logger.error(f"[SEARCH] Search failed for '{request.song_name}' after {elapsed_ms}ms: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -494,20 +510,24 @@ async def traverse_graph(
     user: User = Depends(get_current_user),
 ):
     """Traverse graph from a node with depth limit."""
+    logger.info(f"[GRAPH] User '{user.username}' traversing graph from node: {node_id}, depth: {request.max_depth}")
+    
     # Try real graph traversal first
     if graph_service:
         try:
             result = await graph_service.traverse_graph(node_id, request.max_depth)
+            logger.info(f"[GRAPH] Traversed {node_id}: {result.total_nodes} nodes, {result.total_edges} edges, depth={result.depth_reached}")
             return result
         except ValueError:
             pass  # Node not in DB, fall through to build from search result
         except (MusicMindError, HTTPException):
             raise
         except Exception as e:
-            logger.error(f"Graph traversal failed: {e}", exc_info=True)
+            logger.error(f"[GRAPH] Traversal failed for {node_id}: {e}", exc_info=True)
 
     # Build graph from search result data (works without Aerospike)
     if request.search_result:
+        logger.info(f"[GRAPH] Building graph from search result for {node_id}")
         return _build_graph_from_search_result(str(node_id), request.search_result)
 
     raise HTTPException(status_code=404, detail="Node not found and no search data provided")
@@ -518,18 +538,23 @@ async def get_full_graph(
     user: User = Depends(get_current_user),
 ):
     """Get the full cumulative graph of all enriched entities."""
+    logger.info(f"[GRAPH] User '{user.username}' fetching full graph")
+    
     # Try Aerospike full scan first
     if graph_service:
         try:
             result = await graph_service.get_full_graph()
             if result.total_nodes > 0:
+                logger.info(f"[GRAPH] Returning Aerospike graph: {result.total_nodes} nodes, {result.total_edges} edges")
                 return result
         except Exception as e:
             logger.debug(f"Aerospike full graph scan failed: {e}")
 
     # Fall back to in-memory accumulator
     if not graph_accumulator.is_empty:
-        return graph_accumulator.get_full_graph()
+        result = graph_accumulator.get_full_graph()
+        logger.info(f"[GRAPH] Returning accumulated graph: {result.total_nodes} nodes, {result.total_edges} edges")
+        return result
 
     raise HTTPException(
         status_code=404, detail="No graph data available yet. Search for a song first."
@@ -553,8 +578,10 @@ def _build_graph_from_search_result(
     song_label = song.get("title") or song.get("name", "Unknown Song")
     song_id = _deterministic_id("song", song_label)
     nodes.append(GraphNode(id=song_id, type="Song", data={**song, "label": song_label}))
+    logger.info(f"[GRAPH] Built graph node: Song '{song_label}' (id={song_id})")
 
     # Artist nodes
+    artist_count = 0
     for artist in artists if isinstance(artists, list) else []:
         artist_name = artist.get("name", "")
         if not artist_name:
@@ -562,8 +589,11 @@ def _build_graph_from_search_result(
         aid = _deterministic_id("artist", artist_name)
         nodes.append(GraphNode(id=aid, type="Artist", data={**artist, "label": artist_name}))
         edges.append(GraphEdge(from_node_id=aid, to_node_id=song_id, edge_type="PERFORMED_IN"))
+        artist_count += 1
+    logger.info(f"[GRAPH] Built {artist_count} artist nodes for '{song_label}'")
 
     # Album node
+    album_count = 0
     if album:
         album_name = album.get("name") or album.get("title", "")
         if album_name:
@@ -572,6 +602,10 @@ def _build_graph_from_search_result(
             edges.append(
                 GraphEdge(from_node_id=song_id, to_node_id=alid, edge_type="PART_OF_ALBUM")
             )
+            album_count = 1
+            logger.info(f"[GRAPH] Built album node: '{album_name}' for song '{song_label}'")
+
+    logger.info(f"[GRAPH] Graph built for '{song_label}': {len(nodes)} nodes, {len(edges)} edges")
 
     return GraphTraversalResponse(
         nodes=nodes,

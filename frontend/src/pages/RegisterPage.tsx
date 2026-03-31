@@ -1,4 +1,4 @@
-import { RedirectToSignUp, SignUp } from '@clerk/react';
+import { SignUp } from '@clerk/react';
 
 export default function RegisterPage() {
   return (
@@ -7,7 +7,8 @@ export default function RegisterPage() {
         routing="path"
         path="/register"
         signInUrl="/login"
-        afterSignUpUrl="/"
+        forceRedirectUrl="/"
+        fallbackRedirectUrl="/"
       />
     </div>
   );

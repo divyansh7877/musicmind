@@ -1,5 +1,4 @@
-import { RedirectToSignIn, SignIn } from '@clerk/react';
-import { useEffect } from 'react';
+import { SignIn } from '@clerk/react';
 
 export default function LoginPage() {
   return (
@@ -8,8 +7,8 @@ export default function LoginPage() {
         routing="path"
         path="/login"
         signUpUrl="/register"
-        afterSignInUrl="/"
-        fallback={<RedirectToSignIn />}
+        fallbackRedirectUrl="/"
+        forceRedirectUrl="/"
       />
     </div>
   );
