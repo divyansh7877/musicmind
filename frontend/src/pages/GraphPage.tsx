@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useParams, useLocation } from 'react-router-dom';
-import { useQuery, useMutation } from '@tanstack/react-query';
-import { getFullGraph, traverseGraph, submitFeedback } from '../utils/api';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { getFullGraph, traverseGraph, submitFeedback, explodeGraph } from '../utils/api';
 import GraphVisualization from '../components/GraphVisualization';
 import NodeDetailPanel from '../components/NodeDetailPanel';
 import ShareButton from '../components/ShareButton';
@@ -36,6 +36,16 @@ export default function GraphPage() {
 
   const feedbackMutation = useMutation({
     mutationFn: submitFeedback,
+  });
+
+  const queryClient = useQueryClient();
+  const explodeMutation = useMutation({
+    mutationFn: explodeGraph,
+    onSuccess: (data) => {
+      console.log(`[EXPLODE] Added ${data.new_nodes_added} nodes, ${data.new_edges_added} edges`);
+      // Refetch the full graph to show the new nodes
+      queryClient.invalidateQueries({ queryKey: ['graph', 'full'] });
+    },
   });
 
   const handleNodeClick = useCallback((node: GraphNode) => {
@@ -102,6 +112,32 @@ export default function GraphPage() {
               )}
             </div>
           )}
+
+          <div className="w-px h-5 bg-mist" />
+
+          <button
+            onClick={() => explodeMutation.mutate()}
+            disabled={explodeMutation.isPending}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-amber/10 text-amber hover:bg-amber/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            title="Explode graph to enrich with more songs, albums, and artists"
+          >
+            {explodeMutation.isPending ? (
+              <>
+                <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                <span>Exploding...</span>
+              </>
+            ) : (
+              <>
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                </svg>
+                <span>Explode</span>
+              </>
+            )}
+          </button>
 
           <ShareButton nodeId={nodeId || ''} />
         </div>

@@ -267,6 +267,60 @@ class SpotifyAgent:
             logger.error(f"Track search failed for '{query}': {e}", exc_info=True)
             return None
 
+    async def search_artist(self, query: str) -> Optional[Dict[str, Any]]:
+        """Search for an artist by name.
+
+        Args:
+            query: Artist name to search for
+
+        Returns:
+            Artist data or None if not found
+        """
+        try:
+            data = await self._make_request(
+                "GET",
+                "search",
+                params={"q": query, "type": "artist", "limit": 1},
+            )
+
+            artists = data.get("artists", {}).get("items", [])
+            if not artists:
+                logger.info(f"No artists found for query: {query}")
+                return None
+
+            return artists[0]
+
+        except Exception as e:
+            logger.error(f"Artist search failed for '{query}': {e}", exc_info=True)
+            return None
+
+    async def search_album(self, query: str) -> Optional[Dict[str, Any]]:
+        """Search for an album by name.
+
+        Args:
+            query: Album name to search for
+
+        Returns:
+            Album data or None if not found
+        """
+        try:
+            data = await self._make_request(
+                "GET",
+                "search",
+                params={"q": query, "type": "album", "limit": 1},
+            )
+
+            albums = data.get("albums", {}).get("items", [])
+            if not albums:
+                logger.info(f"No albums found for query: {query}")
+                return None
+
+            return albums[0]
+
+        except Exception as e:
+            logger.error(f"Album search failed for '{query}': {e}", exc_info=True)
+            return None
+
     async def get_artist_details(self, artist_id: str) -> Optional[Dict[str, Any]]:
         """Get detailed artist information.
 
@@ -296,6 +350,50 @@ class SpotifyAgent:
         except Exception as e:
             logger.error(f"Failed to get album details for {album_id}: {e}", exc_info=True)
             return None
+
+    async def get_artist_top_tracks(self, artist_id: str, limit: int = 3) -> List[Dict[str, Any]]:
+        """Get top tracks for an artist.
+
+        Args:
+            artist_id: Spotify artist ID
+            limit: Maximum number of tracks to return (default 3)
+
+        Returns:
+            List of track data or empty list if not found
+        """
+        try:
+            data = await self._make_request(
+                "GET",
+                f"artists/{artist_id}/top-tracks",
+                params={"market": "US", "limit": limit},
+            )
+            tracks = data.get("tracks", [])
+            return tracks[:limit]
+        except Exception as e:
+            logger.error(f"Failed to get top tracks for artist {artist_id}: {e}", exc_info=True)
+            return []
+
+    async def get_artist_albums(self, artist_id: str, limit: int = 3) -> List[Dict[str, Any]]:
+        """Get albums for an artist.
+
+        Args:
+            artist_id: Spotify artist ID
+            limit: Maximum number of albums to return (default 3)
+
+        Returns:
+            List of album data or empty list if not found
+        """
+        try:
+            data = await self._make_request(
+                "GET",
+                f"artists/{artist_id}/albums",
+                params={"include_groups": "album,single", "market": "US", "limit": limit},
+            )
+            albums = data.get("items", [])
+            return albums[:limit]
+        except Exception as e:
+            logger.error(f"Failed to get albums for artist {artist_id}: {e}", exc_info=True)
+            return []
 
     async def get_audio_features(self, track_id: str) -> Optional[Dict[str, Any]]:
         """Get audio features for a track.

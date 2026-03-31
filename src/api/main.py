@@ -17,6 +17,7 @@ from pydantic import ValidationError as PydanticValidationError
 from config.settings import settings
 from src.agents.orchestrator import OrchestratorAgent
 from src.cache.redis_client import RedisClient
+from src.database.activity_db import get_activity_store
 from src.database.aerospike_client import AerospikeClient
 from src.errors.exceptions import (
     MusicMindError,
@@ -30,6 +31,7 @@ from src.self_improvement.enrichment_scheduler import EnrichmentScheduler
 from src.tracing.overmind_client import OvermindClient
 from src.agents.llm_query_agent import LLMQueryAgent
 from src.api.auth import AuthService, User, TokenResponse
+from src.api.graph_exploder import GraphExploder
 from src.api.graph import GraphService, GraphTraversalRequest, GraphTraversalResponse
 from src.api.rate_limiter import RateLimiter
 from src.api.security import InputValidator
@@ -127,6 +129,36 @@ class GraphAccumulator:
     def is_empty(self) -> bool:
         return len(self._nodes) == 0
 
+    def add_nodes_and_edges(
+        self,
+        nodes: List[Dict[str, Any]],
+        edges: List[Dict[str, Any]],
+    ) -> None:
+        """Add exploded nodes and edges to the accumulated graph.
+
+        Args:
+            nodes: List of node dictionaries with 'id', 'type', 'data'
+            edges: List of edge dictionaries with 'from_node_id', 'to_node_id', 'edge_type', 'properties'
+        """
+        for node in nodes:
+            node_id = node.get("id")
+            if not node_id:
+                continue
+            # Merge with existing node data if present
+            if node_id in self._nodes:
+                existing_data = self._nodes[node_id].get("data", {})
+                existing_data.update(node.get("data", {}))
+                self._nodes[node_id]["data"] = existing_data
+            else:
+                self._nodes[node_id] = node
+
+        for edge in edges:
+            edge_key = (
+                f"{edge.get('from_node_id')}->{edge.get('to_node_id')}:{edge.get('edge_type')}"
+            )
+            if edge_key not in self._edges:
+                self._edges[edge_key] = edge
+
 
 # Initialize clients
 redis_client = RedisClient()
@@ -136,6 +168,7 @@ orchestrator = None
 feedback_processor = None
 auth_service = None
 graph_service = None
+graph_exploder = None
 graph_accumulator = GraphAccumulator()
 rate_limiter = None
 llm_query_agent = None
@@ -144,7 +177,7 @@ llm_query_agent = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle manager for FastAPI application."""
-    global db_client, overmind_client, orchestrator, feedback_processor, auth_service, graph_service, rate_limiter, llm_query_agent
+    global db_client, overmind_client, orchestrator, feedback_processor, auth_service, graph_service, graph_exploder, rate_limiter, llm_query_agent, activity_store
 
     # Initialize clients
     try:
@@ -193,6 +226,14 @@ async def lifespan(app: FastAPI):
         graph_service = GraphService(db_client=db_client)
         logger.info("Graph service initialized")
 
+    # Initialize graph exploder
+    graph_exploder = GraphExploder(
+        cache_client=redis_client,
+        overmind_client=overmind_client,
+        db_client=db_client,
+    )
+    logger.info("Graph exploder initialized")
+
     # Initialize rate limiter
     rate_limiter = RateLimiter(
         cache_client=redis_client,
@@ -210,8 +251,13 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    activity_store = await get_activity_store()
+    logger.info("Activity store initialized")
+
     # Cleanup
     logger.info("Shutting down application")
+    from src.database.activity_db import close_activity_store
+    await close_activity_store()
 
 
 app = FastAPI(
@@ -480,6 +526,28 @@ async def search_song(
             )
             logger.info(f"[GRAPH] Graph accumulated: {len(graph_accumulator._nodes)} total nodes, {len(graph_accumulator._edges)} total edges")
 
+        # Persist activity record
+        try:
+            store = await get_activity_store()
+            song_title = (
+                result.merged_data.get("song", {}).get("title")
+                or result.merged_data.get("song", {}).get("name")
+                or request.song_name
+            )
+            await store.insert(
+                user_id=str(user.id),
+                activity_type="enrichment",
+                description=f"Enriched '{song_title}' — {result.status}, {result.completeness_score * 100:.0f}% complete",
+                metadata={
+                    "song": song_title,
+                    "completeness": result.completeness_score,
+                    "status": result.status,
+                    "node_count": len(result.graph_node_ids),
+                },
+            )
+        except Exception as e:
+            logger.warning(f"Failed to persist activity: {e}")
+
         return SearchResponse(
             status=result.status,
             request_id=str(result.request_id),
@@ -497,6 +565,94 @@ async def search_song(
 
 
 # Graph traversal endpoint
+class ExplosionResponse(BaseModel):
+    """Response model for graph explosion."""
+
+    status: str
+    new_nodes_added: int
+    new_edges_added: int
+    total_nodes: int
+    total_edges: int
+
+
+@app.post("/api/graph/explode", response_model=ExplosionResponse)
+async def explode_graph(
+    user: User = Depends(get_current_user),
+) -> ExplosionResponse:
+    """Explode the current graph by enriching each node with additional data.
+
+    For each artist in the graph, fetches top songs and albums from Spotify.
+    For each song, fetches similar tracks from LastFM.
+    For each album, fetches album tracks from Spotify.
+    Limited to 3 items per category.
+    """
+    # Rate limit check
+    await check_rate_limit(user)
+
+    logger.info(f"[EXPLODE] User '{user.username}' triggered graph explosion")
+
+    if not graph_exploder:
+        raise ServiceUnavailableError("graph_exploder")
+
+    # Get current graph
+    if graph_accumulator.is_empty:
+        raise HTTPException(
+            status_code=404,
+            detail="No graph data available. Search for songs first.",
+        )
+
+    # Get current nodes and edges from accumulator
+    current_graph = graph_accumulator.get_full_graph()
+    nodes = [n.model_dump() for n in current_graph.nodes]
+    edges = [e.model_dump() for e in current_graph.edges]
+
+    logger.info(
+        f"[EXPLODE] Current graph: {len(nodes)} nodes, {len(edges)} edges"
+    )
+
+    # Perform explosion
+    try:
+        new_nodes, new_edges = await graph_exploder.explode_graph(nodes, edges)
+        logger.info(
+            f"[EXPLODE] Explosion produced: {len(new_nodes)} new nodes, {len(new_edges)} new edges"
+        )
+
+        # Add exploded nodes and edges to accumulator
+        graph_accumulator.add_nodes_and_edges(new_nodes, new_edges)
+
+        # Get updated totals
+        updated_graph = graph_accumulator.get_full_graph()
+
+        # Persist activity record
+        try:
+            store = await get_activity_store()
+            await store.insert(
+                user_id=str(user.id),
+                activity_type="explosion",
+                description=f"Exploded graph: +{len(new_nodes)} nodes, +{len(new_edges)} edges",
+                metadata={
+                    "new_nodes": len(new_nodes),
+                    "new_edges": len(new_edges),
+                    "total_nodes": updated_graph.total_nodes,
+                    "total_edges": updated_graph.total_edges,
+                },
+            )
+        except Exception as e:
+            logger.warning(f"Failed to persist activity: {e}")
+
+        return ExplosionResponse(
+            status="success",
+            new_nodes_added=len(new_nodes),
+            new_edges_added=len(new_edges),
+            total_nodes=updated_graph.total_nodes,
+            total_edges=updated_graph.total_edges,
+        )
+
+    except Exception as e:
+        logger.error(f"[EXPLODE] Graph explosion failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class GraphTraversalRequestWithFallback(GraphTraversalRequest):
     """Extended request that optionally includes search result for graph building."""
 
@@ -593,7 +749,6 @@ def _build_graph_from_search_result(
     logger.info(f"[GRAPH] Built {artist_count} artist nodes for '{song_label}'")
 
     # Album node
-    album_count = 0
     if album:
         album_name = album.get("name") or album.get("title", "")
         if album_name:
@@ -602,7 +757,6 @@ def _build_graph_from_search_result(
             edges.append(
                 GraphEdge(from_node_id=song_id, to_node_id=alid, edge_type="PART_OF_ALBUM")
             )
-            album_count = 1
             logger.info(f"[GRAPH] Built album node: '{album_name}' for song '{song_label}'")
 
     logger.info(f"[GRAPH] Graph built for '{song_label}': {len(nodes)} nodes, {len(edges)} edges")
@@ -638,6 +792,22 @@ async def submit_feedback(
 
         feedback_processor.process_user_feedback(feedback)
 
+        # Persist activity record
+        try:
+            store = await get_activity_store()
+            await store.insert(
+                user_id=str(user.id),
+                activity_type="feedback",
+                description=f"Submitted {request.feedback_type} feedback on node {request.node_id}",
+                metadata={
+                    "node_id": request.node_id,
+                    "feedback_type": request.feedback_type,
+                    "feedback_value": request.feedback_value,
+                },
+            )
+        except Exception as e:
+            logger.warning(f"Failed to persist activity: {e}")
+
         return {"status": "success", "message": "Feedback processed"}
     except (MusicMindError, HTTPException):
         raise
@@ -657,26 +827,24 @@ async def get_activity_feed(
 ):
     """Get activity feed for user."""
     try:
-        # Fetch recent activities from cache
-        activities = []
-
-        # Get recent enrichment activities
-        # In production, implement proper activity feed storage
-
-        # Mock response for now
-        activities = [
-            ActivityItem(
-                id="1",
-                type="enrichment",
-                timestamp=datetime.utcnow().isoformat(),
-                description="Song enriched successfully",
-                metadata={"song": "Example Song", "completeness": 0.85},
-            )
-        ]
-
+        store = await get_activity_store()
+        activities, total = await store.list_by_user(
+            user_id=str(user.id),
+            limit=limit,
+            offset=offset,
+        )
         return ActivityResponse(
-            activities=activities[offset : offset + limit],
-            total=len(activities),
+            activities=[
+                ActivityItem(
+                    id=a["id"],
+                    type=a["type"],
+                    timestamp=a["timestamp"],
+                    description=a["description"],
+                    metadata=a["metadata"],
+                )
+                for a in activities
+            ],
+            total=total,
         )
     except Exception as e:
         logger.error(f"Activity feed failed: {e}", exc_info=True)

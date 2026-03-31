@@ -66,3 +66,11 @@ export interface NLQueryResponse {
   answer: string;
   data: unknown[];
 }
+
+export interface ExplosionResponse {
+  status: string;
+  new_nodes_added: number;
+  new_edges_added: number;
+  total_nodes: number;
+  total_edges: number;
+}

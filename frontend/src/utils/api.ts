@@ -6,6 +6,7 @@ import type {
   ActivityResponse,
   FeedbackRequest,
   NLQueryResponse,
+  ExplosionResponse,
 } from '../types/api';
 
 const api = axios.create({
@@ -154,6 +155,11 @@ export async function register(
 
 export async function queryGraph(question: string): Promise<NLQueryResponse> {
   const { data } = await api.post<NLQueryResponse>('/query', { question });
+  return data;
+}
+
+export async function explodeGraph(): Promise<ExplosionResponse> {
+  const { data } = await api.post<ExplosionResponse>('/graph/explode');
   return data;
 }
 
